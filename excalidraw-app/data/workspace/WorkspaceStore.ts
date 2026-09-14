@@ -94,6 +94,7 @@ export class WorkspaceStore {
       appState: {},
       version: meta.version,
       dirty: false,
+      revision: 0,
       updatedAt: meta.updatedAt,
     });
     return meta;
@@ -172,6 +173,7 @@ export class WorkspaceStore {
       appState: remote.appState as DocumentAppState,
       version: remote.document.version,
       dirty: false,
+      revision: 0,
       updatedAt: remote.document.updatedAt,
     };
     await this.cache.put(record);
@@ -196,6 +198,30 @@ export class WorkspaceStore {
     appState: Partial<AppState>,
     fileIds: readonly string[] = [],
   ) {
+    // Serialized per document: this is a read-modify-write across two awaits,
+    // so two overlapping calls could otherwise both read the same record, and
+    // the second would write back a stale version or resurrect a cleared
+    // conflict flag.
+    const previous = this.saveChain.get(id) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() => this.writeLocal(id, elements, appState, fileIds));
+
+    this.saveChain.set(id, next);
+    await next;
+    if (this.saveChain.get(id) === next) {
+      this.saveChain.delete(id);
+    }
+
+    this.scheduleFlush();
+  }
+
+  private async writeLocal(
+    id: DocumentId,
+    elements: readonly ExcalidrawElement[],
+    appState: Partial<AppState>,
+    fileIds: readonly string[],
+  ) {
     const existing = await this.cache.get(id);
     const { document: documentAppState } = splitAppState(appState);
 
@@ -208,16 +234,18 @@ export class WorkspaceStore {
       version: existing?.version ?? this.documents.get(id)?.version ?? 0,
       dirty: true,
       conflictedWithVersion: existing?.conflictedWithVersion,
+      revision: (existing?.revision ?? 0) + 1,
+      // A fresh edit deserves a fresh attempt at a record we had given up on.
+      failures: 0,
       updatedAt: Date.now(),
     });
 
     this.pendingFileIds.set(id, [
       ...new Set([...(this.pendingFileIds.get(id) ?? []), ...fileIds]),
     ]);
-
-    this.scheduleFlush();
   }
 
+  private saveChain = new Map<DocumentId, Promise<void>>();
   private pendingFileIds = new Map<DocumentId, string[]>();
 
   /** Push everything pending now — used on blur, unload, and Ctrl+S (D7). */
@@ -258,12 +286,25 @@ export class WorkspaceStore {
   }
 
   private async runFlush(): Promise<void> {
+    try {
+      await this.drain();
+    } catch (error) {
+      // Most often IndexedDB refusing to write (quota, private mode). Without
+      // this the rejection escapes a `void` call and sync dies silently.
+      this.onSyncState({
+        status: "error",
+        message:
+          error instanceof Error ? error.message : "Local storage unavailable",
+      });
+    }
+  }
+
+  private async drain(): Promise<void> {
     const pending = await this.cache.pending();
-    // Conflicted records stay dirty but are blocked on the user, so they are
-    // not work the queue can do.
-    const syncable = pending.filter(
-      (record) => record.conflictedWithVersion === undefined,
-    );
+    // One definition of "pushable", shared with the remaining-count below.
+    // Duplicating the filter here let the give-up cap be ignored on this path
+    // while being honoured on the other, so a broken record kept retrying.
+    const syncable = await this.cache.syncable();
     const blocked = pending.length - syncable.length;
 
     if (syncable.length === 0) {
@@ -282,11 +323,16 @@ export class WorkspaceStore {
     for (const record of syncable) {
       const outcome = await this.push(record);
       if (outcome === "stop") {
+        // Offline or signed out — a whole-queue condition, so stop and let the
+        // retry path pick everything up together.
         return;
       }
       if (outcome === "conflict") {
         sawConflict = true;
       }
+      // "skip" falls through deliberately: one unpushable document must not
+      // starve the rest. `pending()` is ordered oldest-first, so returning
+      // early here would retry the same poisoned record forever.
     }
 
     if (sawConflict) {
@@ -306,7 +352,7 @@ export class WorkspaceStore {
   /** `stop` aborts the whole flush (offline, signed out). */
   private async push(
     record: SceneRecord,
-  ): Promise<"pushed" | "conflict" | "stop"> {
+  ): Promise<"pushed" | "conflict" | "skip" | "stop"> {
     try {
       const result = await this.api.putScene(record.id, record.version, {
         elements: record.elements,
@@ -314,14 +360,12 @@ export class WorkspaceStore {
         fileIds: this.pendingFileIds.get(record.id) ?? [],
       });
 
-      const current = await this.cache.get(record.id);
-      // Another edit landed while this request was in flight; it keeps the
-      // dirty flag and re-bases onto the version the server just handed back.
-      const stillDirty = current ? current.updatedAt > record.updatedAt : false;
-
-      await this.cache.update(record.id, {
+      // Revision-guarded: if an edit landed while this was in flight, the
+      // record stays dirty and merely re-bases onto the new server version.
+      await this.cache.settle(record.id, record.revision, {
         version: result.version,
-        dirty: stillDirty,
+        dirty: false,
+        failures: 0,
       });
       this.pendingFileIds.delete(record.id);
 
@@ -355,11 +399,24 @@ export class WorkspaceStore {
         return "stop";
       }
 
+      if (error instanceof NotFoundError) {
+        // Deleted from another device. There is nothing left to sync to, and
+        // retrying forever would block every other document's writes.
+        await this.cache.delete(record.id);
+        this.documents.delete(record.id);
+        return "skip";
+      }
+
+      // Something specific to this document that retrying will not fix. Count
+      // it, keep the contents, and move on to the rest of the queue.
+      await this.cache.update(record.id, {
+        failures: (record.failures ?? 0) + 1,
+      });
       this.onSyncState({
         status: "error",
         message: error instanceof Error ? error.message : String(error),
       });
-      return "stop";
+      return "skip";
     }
   }
 
@@ -370,13 +427,31 @@ export class WorkspaceStore {
    * expected to hand the returned document back to the editor.
    */
   async resolveWithServer(id: DocumentId): Promise<LoadedDocument> {
-    await this.cache.update(id, {
-      dirty: false,
-      conflictedWithVersion: undefined,
-    });
-    await this.cache.delete(id);
+    // Fetch first. Deleting the local copy up front would destroy both sides
+    // if the server happened to be unreachable at that moment.
+    const remote = await this.api.getScene(id);
+    this.documents.set(id, remote.document);
 
-    const loaded = await this.loadDocument(id);
+    const elements = remote.elements as readonly ExcalidrawElement[];
+    const appState = remote.appState as DocumentAppState;
+
+    await this.cache.put({
+      id,
+      elements,
+      appState,
+      version: remote.document.version,
+      dirty: false,
+      revision: 0,
+      failures: 0,
+      updatedAt: remote.document.updatedAt,
+    });
+
+    const loaded: LoadedDocument = {
+      meta: remote.document,
+      elements,
+      appState,
+      fromCache: false,
+    };
     this.onDocumentReplaced?.(loaded);
     this.onSyncState({ status: "idle" });
     return loaded;

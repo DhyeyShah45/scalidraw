@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createHarness, makeElement } from "./helpers";
@@ -210,5 +214,61 @@ describe("documents", () => {
       const response = await harness.app.inject({ method, url, cookies });
       expect(response.statusCode, `${method} ${url}`).toBe(404);
     }
+  });
+});
+
+describe("static hosting and SPA fallback (D16, D18)", () => {
+  let harness: Harness;
+  let staticDir: string;
+
+  beforeEach(async () => {
+    staticDir = fs.mkdtempSync(path.join(os.tmpdir(), "scalidraw-static-"));
+    fs.writeFileSync(
+      path.join(staticDir, "index.html"),
+      "<!doctype html><title>app shell</title>",
+    );
+    fs.writeFileSync(path.join(staticDir, "app.js"), "console.log(1);");
+    harness = await createHarness({ STATIC_DIR: staticDir });
+  });
+  afterEach(async () => {
+    await harness.close();
+    fs.rmSync(staticDir, { recursive: true, force: true });
+  });
+
+  it("serves the app shell at the root", async () => {
+    // With `index: false` fastify-static answers 403 here and the fallback
+    // never runs, making the home URL unreachable.
+    const response = await harness.app.inject({ method: "GET", url: "/" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("app shell");
+  });
+
+  it("serves the app shell for a document route on a hard refresh", async () => {
+    const response = await harness.app.inject({
+      method: "GET",
+      url: "/d/some-document-id",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.body).toContain("app shell");
+  });
+
+  it("still serves real assets rather than the shell", async () => {
+    const response = await harness.app.inject({ method: "GET", url: "/app.js" });
+    expect(response.body).toBe("console.log(1);");
+  });
+
+  it("never answers an unknown API route with the shell", async () => {
+    // The SPA fallback swallowing /api/* would turn a typo'd endpoint into a
+    // 200 full of HTML, which is exactly what the client's D24 guard is for.
+    const response = await harness.app.inject({
+      method: "GET",
+      url: "/api/does-not-exist",
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["content-type"]).toContain("application/json");
   });
 });

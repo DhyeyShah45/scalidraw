@@ -24,14 +24,32 @@ export const registerAuthGuard = (
     "requireAuth",
     async (request: FastifyRequest, reply: FastifyReply) => {
       const token = request.cookies[SESSION_COOKIE];
+      if (!token) {
+        await reply
+          .code(401)
+          .send({ error: "unauthorized", code: "NO_SESSION" });
+        return;
+      }
 
-      if (!token || !touchSession(db, token, config.sessionTtlMs)) {
+      const result = touchSession(db, token, config.sessionTtlMs);
+      if (!result.valid) {
         // The client distinguishes this from a Cloudflare Access redirect by
         // the JSON body + explicit code (D24) — an Access bounce arrives as a
         // 302 to an HTML login page, which must not be mistaken for a 401.
         await reply
           .code(401)
           .send({ error: "unauthorized", code: "NO_SESSION" });
+        return;
+      }
+
+      if (result.renewed) {
+        // The row slid; the cookie has to slide with it, or the browser drops
+        // the session at login + TTL no matter how active it was.
+        reply.setCookie(
+          SESSION_COOKIE,
+          token,
+          sessionCookieOptions(config, config.sessionTtlMs),
+        );
       }
     },
   );

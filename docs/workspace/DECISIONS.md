@@ -126,6 +126,19 @@ library          singleton row, items blob            -- D14
 
 Branch off `master`; this fork has no local commits and upstream pulls should stay clean fast-forwards.
 
+## Known gaps (found by review, deliberately not yet fixed)
+
+Carried forward rather than silently ignored. None of these lose data on the happy path; each is a real edge worth closing.
+
+1. **D11 does not hold for images or the library.** The scene queue never expires and survives a reload, but a failed image upload is only cached locally with nothing retrying it, and the library adapter has no queue at all. An image pasted while offline stays local until the document is edited again. _(Phase 4.)_
+2. **`/api/files/batch` has no response cap.** 1000 ids × 16MB re-encoded to base64 in a single JSON body. A real canvas never asks for that, but nothing stops it.
+3. **File ids are trusted, not verified.** The comment says ids are content-derived; the server takes the id from the request body and never checks it against the bytes, so re-uploading under an existing id reports `saved` while keeping the original bytes.
+4. **`duplicateDocument` is not transactional.** The `document_files` copy runs outside `createDocument`'s transaction, so a crash between them yields a copy with no image links.
+5. **`parseIfMatch` is lenient.** `""` coerces to 0, `*` reports 428 rather than being honoured as the wildcard, and weak ETags (`W/"3"`) are accepted where If-Match requires strong comparison. Currently unreachable — documents start at version 1 — but the column default is 0.
+6. **`pending()` deserializes every cached scene on each flush** (~1/s while drawing). Scenes and images live in separate IndexedDB databases so images are not dragged in, but this wants an index once there are many documents.
+7. **`gzipSync` blocks the event loop** on the server's autosave path.
+8. **`migrate()` accepts a future `user_version`** silently, rather than refusing to run against a database written by a newer build.
+
 ## Left as implementation defaults (not separately decided)
 
 Thumbnail format and generation timing; request size caps; snapshot retention tuning; exact shape of the localStorage → document #1 migration; argon2 cost parameters.

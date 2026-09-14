@@ -12,6 +12,15 @@ import type { FastifyInstance } from "fastify";
 import type { Config } from "../config";
 import type { DB } from "../db";
 
+/**
+ * @fastify/rate-limit is registered with `global: false`, so it does nothing
+ * until a route opts in. This is the hard ceiling on top of the backoff
+ * ladder, which only delays rather than refuses.
+ */
+const loginRateLimit = {
+  config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+} as const;
+
 const loginSchema = {
   body: {
     type: "object",
@@ -30,7 +39,7 @@ export const registerAuthRoutes = (
 
   app.post(
     "/api/auth/login",
-    { schema: loginSchema },
+    { ...loginRateLimit, schema: loginSchema },
     async (request, reply) => {
       const { password } = request.body as { password: string };
       const key = request.ip;
@@ -42,8 +51,9 @@ export const registerAuthRoutes = (
         return reply.code(401).send({ error: "invalid credentials" });
       }
 
+      // Pruning happens on the failure path now: it is the only one that
+      // grows the map, and a successful login is far too rare to rely on.
       backoff.reset(key);
-      backoff.prune();
       pruneExpiredSessions(db);
 
       const session = createSession(db, config.sessionTtlMs);

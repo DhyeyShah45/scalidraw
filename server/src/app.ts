@@ -85,7 +85,13 @@ const registerStatic = async (app: FastifyInstance, config: Config) => {
     return;
   }
 
-  await app.register(fastifyStatic, { root: config.staticDir, index: false });
+  // `index: false` makes fastify-static treat "/" as a directory listing and
+  // answer 403 before the SPA fallback below ever runs — the app's own home
+  // URL would be unreachable.
+  await app.register(fastifyStatic, {
+    root: config.staticDir,
+    index: ["index.html"],
+  });
 
   // SPA fallback for path routes like /d/:id (D16). Without this a hard
   // refresh 404s — a trap the service worker otherwise hides, since its

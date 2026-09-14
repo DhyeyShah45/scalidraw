@@ -1,12 +1,29 @@
 import { DefaultSidebar, Sidebar, THEME } from "@excalidraw/excalidraw";
-import {
-  messageCircleIcon,
-  presentationIcon,
-} from "@excalidraw/excalidraw/components/icons";
+import { presentationIcon } from "@excalidraw/excalidraw/components/icons";
 import { LinkButton } from "@excalidraw/excalidraw/components/LinkButton";
 import { useUIAppState } from "@excalidraw/excalidraw/context/ui-appState";
 
+import {
+  DOCUMENTS_TAB,
+  DocumentsSidebarTab,
+} from "../workspace/DocumentsSidebarTab";
+
 import "./AppSidebar.scss";
+
+/** Stacked sheets — the documents tab trigger. */
+const documentsIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <path
+      d="M7.5 3.75h6l4 4v9.5a1.5 1.5 0 0 1-1.5 1.5h-8.5a1.5 1.5 0 0 1-1.5-1.5V5.25a1.5 1.5 0 0 1 1.5-1.5Z"
+      strokeLinejoin="round"
+    />
+    <path d="M13.5 3.75v4h4" strokeLinejoin="round" />
+    <path
+      d="M17.5 8.5h1.5a1.5 1.5 0 0 1 1.5 1.5v9.75a1.5 1.5 0 0 1-1.5 1.5H9.5A1.5 1.5 0 0 1 8 19.75V18.75"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
 
 type SidebarPromoCopyProps = {
   text: string;
@@ -72,10 +89,11 @@ export const AppSidebar = () => {
     <DefaultSidebar>
       <DefaultSidebar.TabTriggers>
         <Sidebar.TabTrigger
-          tab="comments"
-          style={{ opacity: openSidebar?.tab === "comments" ? 1 : 0.4 }}
+          tab={DOCUMENTS_TAB}
+          title="Canvases"
+          style={{ opacity: openSidebar?.tab === DOCUMENTS_TAB ? 1 : 0.4 }}
         >
-          {messageCircleIcon}
+          {documentsIcon}
         </Sidebar.TabTrigger>
         <Sidebar.TabTrigger
           tab="presentation"
@@ -84,26 +102,8 @@ export const AppSidebar = () => {
           {presentationIcon}
         </Sidebar.TabTrigger>
       </DefaultSidebar.TabTriggers>
-      <Sidebar.Tab tab="comments">
-        <div className="app-sidebar-promo-container">
-          <div
-            className="app-sidebar-promo-image"
-            style={{
-              ["--image-source" as any]: `url(/sidebar-comments-promo-${
-                theme === THEME.DARK ? "dark" : "light"
-              }.jpg)`,
-              opacity: 0.9,
-            }}
-          />
-          <SidebarPromoCopy text="Make comments with Excalidraw+" />
-          <LinkButton
-            href={`${
-              import.meta.env.VITE_APP_PLUS_LP
-            }/plus?utm_source=excalidraw&utm_medium=app&utm_content=comments_promo#excalidraw-redirect`}
-          >
-            Sign up now
-          </LinkButton>
-        </div>
+      <Sidebar.Tab tab={DOCUMENTS_TAB}>
+        <DocumentsSidebarTab />
       </Sidebar.Tab>
       <Sidebar.Tab tab="presentation" className="px-3">
         <div className="app-sidebar-promo-container">

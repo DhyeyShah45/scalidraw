@@ -148,6 +148,11 @@ import "./index.scss";
 
 import { ExcalidrawPlusPromoBanner } from "./components/ExcalidrawPlusPromoBanner";
 import { AppSidebar } from "./components/AppSidebar";
+import { ConflictDialog } from "./workspace/ConflictDialog";
+import { LoginGate } from "./workspace/LoginGate";
+import { originWithCurrentDocument } from "./workspace/routing";
+import { SyncStatus } from "./workspace/SyncStatus";
+import { WorkspaceProvider, useWorkspace } from "./workspace/WorkspaceProvider";
 
 import type { CollabAPI } from "./collab/Collab";
 
@@ -282,7 +287,7 @@ const initializeScene = async (opts: {
       }
       scene.scrollToContent = true;
       if (!roomLinkData) {
-        window.history.replaceState({}, APP_NAME, window.location.origin);
+        window.history.replaceState({}, APP_NAME, originWithCurrentDocument());
       }
     } else {
       // https://github.com/excalidraw/excalidraw/issues/1919
@@ -299,10 +304,10 @@ const initializeScene = async (opts: {
       }
 
       roomLinkData = null;
-      window.history.replaceState({}, APP_NAME, window.location.origin);
+      window.history.replaceState({}, APP_NAME, originWithCurrentDocument());
     }
   } else if (externalUrlMatch) {
-    window.history.replaceState({}, APP_NAME, window.location.origin);
+    window.history.replaceState({}, APP_NAME, originWithCurrentDocument());
 
     const url = externalUrlMatch[1];
     try {
@@ -374,6 +379,21 @@ const initializeScene = async (opts: {
 
 const ExcalidrawWrapper = () => {
   const excalidrawAPI = useExcalidrawAPI();
+  const workspace = useWorkspace();
+  // Destructured because the context object identity changes on every sync
+  // state tick; these two are stable, and depending on the whole object would
+  // re-register the global listeners below on each save.
+  const { flush: flushWorkspace, registerApi: registerWorkspaceApi } =
+    workspace;
+
+  /**
+   * The workspace owns the scene unless we are in a collab room, which still
+   * runs the original localStorage-backed path (D17 leaves collab's transport
+   * alone). `isCollaborationLink` is read from the URL rather than collab
+   * state so the decision is stable for the lifetime of the mount.
+   */
+  const workspaceOwnsScene =
+    !!workspace.open && !isCollaborationLink(window.location.href);
 
   const [errorMessage, setErrorMessage] = useState("");
   const isCollabDisabled = isRunningInIframe();
@@ -396,6 +416,11 @@ const ExcalidrawWrapper = () => {
   }
 
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    registerWorkspaceApi(excalidrawAPI);
+    return () => registerWorkspaceApi(null);
+  }, [excalidrawAPI, registerWorkspaceApi]);
 
   useEffect(() => {
     trackEvent("load", "frame", getFrame());
@@ -562,10 +587,16 @@ const ExcalidrawWrapper = () => {
       return;
     }
 
-    initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
-      loadImages(data, /* isInitialLoad */ true);
-      initialStatePromiseRef.current.promise.resolve(data.scene);
-    });
+    if (workspaceOwnsScene) {
+      // The document was already loaded and handed to `initialData`; running
+      // the localStorage bootstrap here would immediately overwrite it.
+      initialStatePromiseRef.current.promise.resolve(null);
+    } else {
+      initializeScene({ collabAPI, excalidrawAPI }).then(async (data) => {
+        loadImages(data, /* isInitialLoad */ true);
+        initialStatePromiseRef.current.promise.resolve(data.scene);
+      });
+    }
 
     const onHashChange = async (event: HashChangeEvent) => {
       event.preventDefault();
@@ -596,6 +627,12 @@ const ExcalidrawWrapper = () => {
 
     const syncData = debounce(() => {
       if (isTestEnv()) {
+        return;
+      }
+      if (workspaceOwnsScene) {
+        // Cross-tab reconciliation goes through the server now. The legacy
+        // path reads a single global localStorage key, so in a multi-document
+        // world it would restore whichever document another tab touched last.
         return;
       }
       if (
@@ -655,6 +692,7 @@ const ExcalidrawWrapper = () => {
 
     const onUnload = () => {
       LocalData.flushSave();
+      void flushWorkspace();
     };
 
     const visibilityChange = (event: FocusEvent | Event) => {
@@ -685,7 +723,15 @@ const ExcalidrawWrapper = () => {
         false,
       );
     };
-  }, [isCollabDisabled, collabAPI, excalidrawAPI, setLangCode, loadImages]);
+  }, [
+    isCollabDisabled,
+    collabAPI,
+    excalidrawAPI,
+    setLangCode,
+    loadImages,
+    workspaceOwnsScene,
+    flushWorkspace,
+  ]);
 
   useEffect(() => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
@@ -721,9 +767,13 @@ const ExcalidrawWrapper = () => {
       collabAPI.syncElements(elements);
     }
 
+    if (workspaceOwnsScene) {
+      workspace.handleChange(elements, appState, files);
+    }
+
     // this check is redundant, but since this is a hot path, it's best
     // not to evaludate the nested expression every time
-    if (!LocalData.isSavePaused()) {
+    if (!workspaceOwnsScene && !LocalData.isSavePaused()) {
       LocalData.save(elements, appState, files, () => {
         if (excalidrawAPI) {
           let didChange = false;
@@ -946,11 +996,23 @@ const ExcalidrawWrapper = () => {
       })}
     >
       <Excalidraw
+        /**
+         * D15: switching documents remounts the editor rather than swapping
+         * elements in place. Remount re-runs the editor's own load sequence,
+         * which resets the files map, image cache, store and history together
+         * — none of which the host API can clear. Swapping in place leaks
+         * images across documents and lets undo reach into the previous one.
+         */
+        key={workspace.open?.meta.id ?? "no-document"}
         viewportStatusFrame={viewportStatusFrame}
         userToFollow={userToFollow}
         onChange={onChange}
         onExport={onExport}
-        initialData={initialStatePromiseRef.current.promise}
+        initialData={
+          workspaceOwnsScene && workspace.open
+            ? workspace.open.initialData
+            : initialStatePromiseRef.current.promise
+        }
         isCollaborating={isCollaborating}
         onPointerUpdate={collabAPI?.onPointerUpdate}
         UIOptions={{
@@ -1059,6 +1121,7 @@ const ExcalidrawWrapper = () => {
           )}
         </OverwriteConfirmDialog>
         <AppFooter onChange={() => excalidrawAPI?.refresh()} />
+        <SyncStatus />
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />
@@ -1101,6 +1164,8 @@ const ExcalidrawWrapper = () => {
         />
 
         <AppSidebar />
+
+        <ConflictDialog />
 
         {errorMessage && (
           <ErrorDialog onClose={() => setErrorMessage("")}>
@@ -1312,11 +1377,41 @@ const ExcalidrawApp = () => {
     <TopErrorBoundary>
       <Provider store={appJotaiStore}>
         <ExcalidrawAPIProvider>
-          <ExcalidrawWrapper />
+          <WorkspaceProvider>
+            <WorkspaceGate />
+          </WorkspaceProvider>
         </ExcalidrawAPIProvider>
       </Provider>
     </TopErrorBoundary>
   );
+};
+
+/**
+ * Decides between the sign-in screen and the editor.
+ *
+ * The editor is never mounted for a signed-out user: it would start an
+ * autosave loop against a document it cannot reach, piling writes into a queue
+ * the login screen has no way to show.
+ */
+const WorkspaceGate = () => {
+  const { status, error } = useWorkspace();
+
+  if (status === "loading") {
+    return <div className="workspace-boot" />;
+  }
+  if (status === "unauthenticated") {
+    return <LoginGate />;
+  }
+  if (status === "error") {
+    return (
+      <div className="workspace-boot workspace-boot--error">
+        <p>Could not reach the workspace server.</p>
+        <p className="workspace-boot__detail">{error}</p>
+      </div>
+    );
+  }
+
+  return <ExcalidrawWrapper />;
 };
 
 export default ExcalidrawApp;

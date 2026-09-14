@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 
+import { NotFoundError } from "./api";
 import { createMemoryKV } from "./kv";
 import { SceneCache } from "./sceneCache";
 import { FakeWorkspaceServer } from "./testFakes";
@@ -320,5 +321,149 @@ describe("WorkspaceStore", () => {
       expect(await cache.get(created.id)).toBeUndefined();
       expect(server.scenes.has(created.id)).toBe(false);
     });
+  });
+});
+
+describe("WorkspaceStore — queue robustness", () => {
+  let server: FakeWorkspaceServer;
+  let cache: SceneCache;
+  let store: WorkspaceStore;
+  let states: SyncState[];
+
+  beforeEach(() => {
+    server = new FakeWorkspaceServer();
+    cache = new SceneCache(createMemoryKV());
+    states = [];
+    store = new WorkspaceStore({
+      cache,
+      api: server.api,
+      flushDebounceMs: 100_000,
+      onSyncState: (state) => states.push(state),
+    });
+  });
+
+  const seedAndOpen = async (id: string) => {
+    server.seed(id);
+    await store.loadDocument(id);
+  };
+
+  it("does not let one broken document block the rest of the queue", async () => {
+    await seedAndOpen("doc-good");
+    await seedAndOpen("doc-broken");
+
+    // Oldest-first ordering means the broken one is attempted first; before
+    // the fix it returned "stop" and the healthy document never synced.
+    await store.save("doc-broken", [element("x")], {});
+    await store.save("doc-good", [element("y")], {});
+
+    const realPut = server.api.putScene;
+    server.api.putScene = async (id, base, payload) => {
+      if (id === "doc-broken") {
+        throw new Error("500 internal server error");
+      }
+      return realPut(id, base, payload);
+    };
+
+    await store.flushNow();
+
+    expect(server.scenes.get("doc-good")!.elements).toEqual([element("y")]);
+  });
+
+  it("gives up on a document after repeated failures instead of spinning", async () => {
+    await seedAndOpen("doc-1");
+    await store.save("doc-1", [element("a")], {});
+    server.api.putScene = async () => {
+      throw new Error("permanently broken");
+    };
+
+    for (let i = 0; i < 8; i++) {
+      await store.flushNow();
+    }
+
+    // Still held locally — giving up on pushing is not the same as discarding.
+    expect((await cache.get("doc-1"))!.dirty).toBe(true);
+    expect((await cache.get("doc-1"))!.failures).toBe(SceneCache.MAX_FAILURES);
+  });
+
+  it("retries a given-up document as soon as it is edited again", async () => {
+    await seedAndOpen("doc-1");
+    await store.save("doc-1", [element("a")], {});
+    const realPut = server.api.putScene;
+    server.api.putScene = async () => {
+      throw new Error("broken");
+    };
+    for (let i = 0; i < 8; i++) {
+      await store.flushNow();
+    }
+
+    server.api.putScene = realPut;
+    await store.save("doc-1", [element("b")], {});
+    await store.flushNow();
+
+    expect(server.scenes.get("doc-1")!.elements).toEqual([element("b")]);
+  });
+
+  it("drops a document deleted on another device rather than retrying forever", async () => {
+    await seedAndOpen("doc-1");
+    await store.save("doc-1", [element("a")], {});
+
+    server.scenes.delete("doc-1");
+    server.api.putScene = async () => {
+      throw new NotFoundError("gone");
+    };
+
+    await store.flushNow();
+
+    expect(await cache.get("doc-1")).toBeUndefined();
+    expect(await store.pendingCount()).toBe(0);
+  });
+
+  it("keeps an edit that lands while a push is in flight", async () => {
+    await seedAndOpen("doc-1");
+    await store.save("doc-1", [element("first")], {});
+
+    // Slip a second edit in between the request going out and it resolving.
+    const realPut = server.api.putScene;
+    server.api.putScene = async (id, base, payload) => {
+      const result = await realPut(id, base, payload);
+      await store.save("doc-1", [element("second")], {});
+      return result;
+    };
+
+    await store.flushNow();
+    server.api.putScene = realPut;
+
+    // Before the revision guard, the settle wrote `dirty: false` over the
+    // second edit and it was never sent to the server at all.
+    const record = await cache.get("doc-1");
+    expect(record!.elements).toEqual([element("second")]);
+    expect(record!.dirty).toBe(true);
+
+    await store.flushNow();
+    expect(server.scenes.get("doc-1")!.elements).toEqual([element("second")]);
+  });
+
+  it("reports a cache failure instead of dying silently", async () => {
+    await seedAndOpen("doc-1");
+    vi.spyOn(cache, "pending").mockRejectedValueOnce(
+      new Error("QuotaExceededError"),
+    );
+
+    await store.flushNow();
+
+    expect(states.at(-1)).toMatchObject({ status: "error" });
+  });
+
+  it("does not destroy both copies if the server drops mid-resolution", async () => {
+    await seedAndOpen("doc-1");
+    server.writeElsewhere("doc-1");
+    await store.save("doc-1", [element("mine")], {});
+    await store.flushNow();
+
+    server.offline = true;
+    await expect(store.resolveWithServer("doc-1")).rejects.toThrow();
+
+    // The local copy must survive a failed resolution attempt.
+    expect((await cache.get("doc-1"))!.elements).toEqual([element("mine")]);
   });
 });

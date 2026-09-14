@@ -35,9 +35,36 @@ export class SceneCache {
     return this.put({ ...existing, ...patch });
   }
 
+  /**
+   * Apply the result of a push, but only if no edit landed while it was in
+   * flight. Without the revision guard the update stamps `dirty: false` onto
+   * content the server has never seen, silently losing that edit.
+   */
+  async settle(
+    id: DocumentId,
+    expectedRevision: number,
+    patch: Partial<Omit<SceneRecord, "id">>,
+  ) {
+    const existing = await this.get(id);
+    if (!existing) {
+      return undefined;
+    }
+    if (existing.revision !== expectedRevision) {
+      // Keep it dirty; only adopt the new server version to re-base onto.
+      return this.put({
+        ...existing,
+        version: patch.version ?? existing.version,
+      });
+    }
+    return this.put({ ...existing, ...patch });
+  }
+
   delete(id: DocumentId) {
     return this.kv.delete(this.key(id));
   }
+
+  /** Pushes stop being retried after this many consecutive failures. */
+  static readonly MAX_FAILURES = 5;
 
   async pending(): Promise<SceneRecord[]> {
     const all = await this.kv.entries<SceneRecord>();
@@ -58,7 +85,9 @@ export class SceneCache {
    */
   async syncable() {
     return (await this.pending()).filter(
-      (record) => record.conflictedWithVersion === undefined,
+      (record) =>
+        record.conflictedWithVersion === undefined &&
+        (record.failures ?? 0) < SceneCache.MAX_FAILURES,
     );
   }
 }

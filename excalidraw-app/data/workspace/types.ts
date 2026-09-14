@@ -30,6 +30,15 @@ export type SceneRecord = {
   dirty: boolean;
   /** Set when the server rejected the pending write as stale (D9). */
   conflictedWithVersion?: number;
+  /**
+   * Monotonic local edit counter. A push clears `dirty` only if the revision
+   * still matches the one it sent — `updatedAt` cannot do this job, because
+   * two saves inside the same millisecond are indistinguishable and the
+   * second one would be marked synced without ever being sent.
+   */
+  revision: number;
+  /** Consecutive failed pushes, used to stop retrying a poisoned record. */
+  failures?: number;
   updatedAt: number;
 };
 

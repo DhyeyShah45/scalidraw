@@ -24,22 +24,38 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 class ConfigError extends Error {}
 
+/**
+ * Integer-only on purpose: several of these reach SQLite as a `LIMIT`, where a
+ * fractional value is a `datatype mismatch` on every save and a negative one
+ * silently means "unlimited".
+ */
 const num = (raw: string | undefined, fallback: number, name: string) => {
   if (raw === undefined || raw === "") {
     return fallback;
   }
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    throw new ConfigError(`${name} must be a number, got "${raw}"`);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new ConfigError(
+      `${name} must be a positive whole number, got "${raw}"`,
+    );
   }
   return parsed;
 };
 
-const bool = (raw: string | undefined, fallback: boolean) => {
+const bool = (raw: string | undefined, fallback: boolean, name?: string) => {
   if (raw === undefined || raw === "") {
     return fallback;
   }
-  return raw === "true" || raw === "1";
+  const normalized = raw.trim().toLowerCase();
+  if (["true", "1", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["false", "0", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new ConfigError(
+    `${name ?? "flag"} must be true or false, got "${raw}"`,
+  );
 };
 
 export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
@@ -62,8 +78,8 @@ export const loadConfig = (env: NodeJS.ProcessEnv = process.env): Config => {
     passwordHash,
     sessionTtlMs: num(env.SESSION_TTL_DAYS, 30, "SESSION_TTL_DAYS") * DAY_MS,
     staticDir: env.STATIC_DIR ? path.resolve(env.STATIC_DIR) : null,
-    trustProxy: bool(env.TRUST_PROXY, true),
-    cookieSecure: bool(env.COOKIE_SECURE, true),
+    trustProxy: bool(env.TRUST_PROXY, true, "TRUST_PROXY"),
+    cookieSecure: bool(env.COOKIE_SECURE, true, "COOKIE_SECURE"),
     maxSceneBytes: num(
       env.MAX_SCENE_BYTES,
       32 * 1024 * 1024,

@@ -174,6 +174,10 @@ export default defineConfig(({ mode }) => {
             // loading. So we exclude it by name instead.
             "**/CodeMirrorEditor-*.js",
           ],
+          // Without this the service worker answers /api/* navigations from
+          // the precached index.html — a top-level navigation to an API route
+          // would get the app shell instead of reaching the server.
+          navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
               urlPattern: new RegExp(".+.woff2"),

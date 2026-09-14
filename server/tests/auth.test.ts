@@ -161,3 +161,107 @@ describe("config", () => {
     expect(() => loadConfig({} as NodeJS.ProcessEnv)).toThrow(/required/);
   });
 });
+
+describe("session sliding (D25)", () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    harness = await createHarness({ SESSION_TTL_DAYS: "30" });
+  });
+  afterEach(async () => harness.close());
+
+  it("re-issues the cookie when the session slides, not just the row", async () => {
+    const cookies = await harness.auth();
+
+    // Push the session past its halfway point so the next request renews it.
+    const soon = Date.now() + 60_000;
+    harness.db.prepare(`UPDATE sessions SET expires_at = ?`).run(soon);
+
+    const response = await harness.app.inject({
+      method: "GET",
+      url: "/api/documents",
+      cookies,
+    });
+
+    expect(response.statusCode).toBe(200);
+    // Extending only the database row leaves the browser discarding the
+    // cookie at login + TTL, which makes sliding renewal inert.
+    expect(response.cookies).toHaveLength(1);
+    expect(response.cookies[0]!.name).toBe("scalidraw_session");
+    expect(response.cookies[0]!.maxAge).toBe(30 * 24 * 60 * 60);
+
+    const stored = harness.db
+      .prepare(`SELECT expires_at FROM sessions`)
+      .get() as { expires_at: number };
+    expect(stored.expires_at).toBeGreaterThan(soon);
+  });
+
+  it("does not re-issue the cookie on every request", async () => {
+    const cookies = await harness.auth();
+
+    const response = await harness.app.inject({
+      method: "GET",
+      url: "/api/documents",
+      cookies,
+    });
+
+    expect(response.cookies).toHaveLength(0);
+  });
+});
+
+describe("backoff cannot be shed by rotating X-Forwarded-For", () => {
+  it("keeps delaying once the global ladder engages", () => {
+    const backoff = new LoginBackoff();
+
+    // A per-IP ladder alone is bypassable: behind a trusted proxy the client
+    // controls the header request.ip derives from.
+    for (let i = 0; i < 25; i++) {
+      backoff.recordFailure(`10.0.0.${i}`);
+    }
+
+    expect(backoff.delayFor("10.0.0.99")).toBeGreaterThan(0);
+  });
+
+  it("stays out of the way of a handful of honest typos", () => {
+    const backoff = new LoginBackoff();
+    for (let i = 0; i < 3; i++) {
+      backoff.recordFailure("10.0.0.1");
+    }
+    // Same user, same IP: only the per-IP ladder applies at this point.
+    expect(backoff.delayFor("10.0.0.2")).toBe(0);
+  });
+
+  it("bounds the number of tracked keys", () => {
+    const backoff = new LoginBackoff();
+    for (let i = 0; i < 12_000; i++) {
+      backoff.recordFailure(`10.1.${Math.floor(i / 256)}.${i % 256}`);
+    }
+    // Unbounded growth here would be a memory DoS via a spoofable header.
+    expect(backoff.size()).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe("config validation", () => {
+  const base = { AUTH_PASSWORD_HASH: "$argon2id$fake" } as NodeJS.ProcessEnv;
+
+  it("rejects a fractional snapshot retention", () => {
+    // It reaches SQLite as a LIMIT, where 2.5 is a datatype mismatch on every
+    // single save rather than a startup error.
+    expect(() =>
+      loadConfig({ ...base, SNAPSHOTS_PER_DOCUMENT: "2.5" }),
+    ).toThrow(/whole number/);
+  });
+
+  it("rejects a negative retention, which SQLite reads as unlimited", () => {
+    expect(() => loadConfig({ ...base, SNAPSHOTS_PER_DOCUMENT: "-1" })).toThrow(
+      /whole number/,
+    );
+  });
+
+  it("rejects an ambiguous boolean rather than silently defaulting", () => {
+    expect(() => loadConfig({ ...base, COOKIE_SECURE: "TRUE" })).not.toThrow();
+    expect(() => loadConfig({ ...base, COOKIE_SECURE: "yes-please" })).toThrow(
+      /true or false/,
+    );
+  });
+});
