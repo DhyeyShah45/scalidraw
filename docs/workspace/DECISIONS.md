@@ -121,7 +121,7 @@ library          singleton row, items blob            -- D14
 1. `server/` workspace — Fastify + better-sqlite3, auth, documents CRUD. Curl-testable standalone before any UI exists.
 2. Client storage adapter — `LocalData` stops being a static singleton, becomes document-scoped; IndexedDB write-through cache with flush queue. **The hard part.**
 3. Login gate + documents sidebar tab + `/d/:id` routing + remount-on-switch.
-4. Migration (existing localStorage scene becomes document #1), per-doc tabSync keys, server-side image refcount, collab fixes (D17).
+4. ~~Migration (existing localStorage scene becomes document #1), per-doc tabSync keys, server-side image refcount, collab fixes (D17).~~ **Done.** The tabSync item turned out to be two problems: documents in different tabs are isolated for free once the cache is document-scoped, but two tabs on the _same_ document share one cache record and therefore one `version`, making them strictly **less** safe than two devices — the server's If-Match check could not see them diverge. Solved with a per-tab writer id rather than localStorage version stamps.
 5. Deploy — LaunchDaemon, cloudflared, Access, backup cron.
 
 Branch off `master`; this fork has no local commits and upstream pulls should stay clean fast-forwards.
@@ -130,7 +130,7 @@ Branch off `master`; this fork has no local commits and upstream pulls should st
 
 Carried forward rather than silently ignored. None of these lose data on the happy path; each is a real edge worth closing.
 
-1. **D11 does not hold for images or the library.** The scene queue never expires and survives a reload, but a failed image upload is only cached locally with nothing retrying it, and the library adapter has no queue at all. An image pasted while offline stays local until the document is edited again. _(Phase 4.)_
+1. **D11 does not hold for the library.** Scenes and images both have durable retry queues now (phase 4). The library adapter still has neither a queue nor a catch, so a library edit made offline is lost — lower stakes than a drawing, but the same class of bug.
 2. **`/api/files/batch` has no response cap.** 1000 ids × 16MB re-encoded to base64 in a single JSON body. A real canvas never asks for that, but nothing stops it.
 3. **File ids are trusted, not verified.** The comment says ids are content-derived; the server takes the id from the request body and never checks it against the bytes, so re-uploading under an existing id reports `saved` while keeping the original bytes.
 4. **`duplicateDocument` is not transactional.** The `document_files` copy runs outside `createDocument`'s transaction, so a crash between them yields a copy with no image links.
