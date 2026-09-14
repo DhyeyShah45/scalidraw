@@ -17,6 +17,15 @@ export default defineConfig(({ mode }) => {
       port: Number(envVars.VITE_APP_PORT || 3000),
       // open the browser
       open: true,
+      // In production one Fastify process serves both the app and the API
+      // (D18), so they share an origin. The dev server has to fake that or
+      // every /api call from the workspace lands on Vite instead.
+      proxy: {
+        "/api": {
+          target: `http://127.0.0.1:${envVars.WORKSPACE_SERVER_PORT || 3010}`,
+          changeOrigin: false,
+        },
+      },
     },
     // We need to specify the envDir since now there are no
     //more located in parallel with the vite.config.ts file but in parent dir

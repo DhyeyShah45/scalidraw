@@ -256,7 +256,10 @@ describe("static hosting and SPA fallback (D16, D18)", () => {
   });
 
   it("still serves real assets rather than the shell", async () => {
-    const response = await harness.app.inject({ method: "GET", url: "/app.js" });
+    const response = await harness.app.inject({
+      method: "GET",
+      url: "/app.js",
+    });
     expect(response.body).toBe("console.log(1);");
   });
 
