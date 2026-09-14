@@ -27,3 +27,7 @@ dev-dist
 html
 meta*.json
 .claude
+
+# self-hosted workspace server
+server/data
+server/.env

@@ -5,7 +5,8 @@
   "workspaces": [
     "excalidraw-app",
     "packages/*",
-    "examples/*"
+    "examples/*",
+    "server"
   ],
   "devDependencies": {
     "@babel/preset-env": "7.26.9",
@@ -88,7 +89,10 @@
     "release:latest": "node scripts/release.js --tag=latest",
     "rm:build": "rimraf --glob excalidraw-app/build excalidraw-app/dist excalidraw-app/dev-dist packages/*/dist packages/*/build examples/*/build examples/*/dist",
     "rm:node_modules": "rimraf --glob node_modules excalidraw-app/node_modules packages/*/node_modules",
-    "clean-install": "yarn rm:node_modules && yarn install"
+    "clean-install": "yarn rm:node_modules && yarn install",
+    "test:server": "yarn --cwd ./server test",
+    "start:server": "yarn --cwd ./server dev",
+    "build:server": "yarn --cwd ./server build"
   },
   "resolutions": {
     "strip-ansi": "6.0.1"
