@@ -123,3 +123,140 @@ describe("file handlers", () => {
     expect(result.erroredFiles.get("remote" as FileId)).toBe(true);
   });
 });
+
+describe("image upload queue (closes the D11 gap for images)", () => {
+  let cache: KVStore;
+  let server: FakeWorkspaceServer;
+
+  beforeEach(() => {
+    cache = createMemoryKV();
+    server = new FakeWorkspaceServer();
+  });
+
+  const handlers = (documentId: string | null = "doc-1") =>
+    createFileHandlers({
+      currentDocumentId: () => documentId,
+      cache,
+      api: server.api,
+    });
+
+  const goOffline = () => {
+    server.api.uploadFiles = async () => {
+      throw new NetworkError("offline");
+    };
+  };
+
+  it("queues an upload that could not reach the server", async () => {
+    goOffline();
+
+    await handlers().saveFiles({
+      addedFiles: new Map([["f1" as FileId, file("f1")]]),
+    });
+
+    expect(await handlers().pendingUploadCount()).toBe(1);
+  });
+
+  it("uploads the backlog once the server is reachable again", async () => {
+    goOffline();
+    await handlers().saveFiles({
+      addedFiles: new Map([["f1" as FileId, file("f1")]]),
+    });
+
+    const uploads: { documentId: string; ids: string[] }[] = [];
+    server.api.uploadFiles = async (documentId, files) => {
+      uploads.push({ documentId, ids: files.map((f) => f.id) });
+      return { saved: files.map((f) => f.id), rejected: [] };
+    };
+
+    const result = await handlers().flushPendingUploads();
+
+    expect(result.uploaded).toEqual(["f1"]);
+    expect(uploads).toEqual([{ documentId: "doc-1", ids: ["f1"] }]);
+    expect(await handlers().pendingUploadCount()).toBe(0);
+  });
+
+  it("survives a reload, because the queue lives in the cache", async () => {
+    goOffline();
+    await handlers().saveFiles({
+      addedFiles: new Map([["f1" as FileId, file("f1")]]),
+    });
+
+    // A fresh set of handlers over the same cache — the browser restarting.
+    const revived = createFileHandlers({
+      currentDocumentId: () => "doc-1",
+      cache,
+      api: new FakeWorkspaceServer().api,
+    });
+
+    expect(await revived.pendingUploadCount()).toBe(1);
+  });
+
+  it("attributes each queued image to the document it came from", async () => {
+    goOffline();
+    await handlers("doc-a").saveFiles({
+      addedFiles: new Map([["fa" as FileId, file("fa")]]),
+    });
+    await handlers("doc-b").saveFiles({
+      addedFiles: new Map([["fb" as FileId, file("fb")]]),
+    });
+
+    const seen = new Map<string, string[]>();
+    server.api.uploadFiles = async (documentId, files) => {
+      seen.set(
+        documentId,
+        files.map((f) => f.id),
+      );
+      return { saved: files.map((f) => f.id), rejected: [] };
+    };
+
+    await handlers().flushPendingUploads();
+
+    // Uploading to the wrong document would corrupt the server refcount.
+    expect(seen.get("doc-a")).toEqual(["fa"]);
+    expect(seen.get("doc-b")).toEqual(["fb"]);
+  });
+
+  it("keeps the queue intact when the retry also fails", async () => {
+    goOffline();
+    await handlers().saveFiles({
+      addedFiles: new Map([["f1" as FileId, file("f1")]]),
+    });
+
+    const result = await handlers().flushPendingUploads();
+
+    expect(result.uploaded).toEqual([]);
+    expect(result.stillPending).toBe(1);
+  });
+
+  it("does not queue a file the server actively rejected", async () => {
+    server.api.uploadFiles = async () => ({
+      saved: [],
+      rejected: [{ id: "f1", reason: "too large" }],
+    });
+
+    await handlers().saveFiles({
+      addedFiles: new Map([["f1" as FileId, file("f1")]]),
+    });
+
+    // Retrying would fail identically; this one is genuinely errored.
+    expect(await handlers().pendingUploadCount()).toBe(0);
+  });
+
+  it("drops a marker whose bytes are gone rather than retrying forever", async () => {
+    goOffline();
+    await handlers().saveFiles({
+      addedFiles: new Map([["f1" as FileId, file("f1")]]),
+    });
+    await cache.delete("file:f1");
+
+    server.api.uploadFiles = async (_documentId, files) => ({
+      saved: files.map((f) => f.id),
+      rejected: [],
+    });
+
+    const result = await handlers().flushPendingUploads();
+
+    expect(result.uploaded).toEqual([]);
+    expect(result.stillPending).toBe(0);
+  });
+});

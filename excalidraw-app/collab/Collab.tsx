@@ -130,6 +130,15 @@ export interface CollabAPI {
 
 interface CollabProps {
   excalidrawAPI: ExcalidrawImperativeAPI;
+  /**
+   * Called when a session ends with the user choosing to keep the room's
+   * contents (D17). Without this the room scene is simply left in the editor
+   * and persisted over whichever document happened to be open — which, once
+   * documents live on a server, is a silent remote overwrite.
+   */
+  onAdoptRoomContent?: (
+    elements: readonly OrderedExcalidrawElement[],
+  ) => Promise<void> | void;
 }
 
 class Collab extends PureComponent<CollabProps, CollabState> {
@@ -384,7 +393,27 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     if (!keepRemoteState) {
       LocalData.fileStorage.reset();
       this.destroySocketClient();
+    } else if (this.props.onAdoptRoomContent) {
+      // D17: keep the room's work, but as a NEW document. Leaving it in the
+      // editor would let the next autosave write it over whatever document
+      // was open when the session started — a silent overwrite of unrelated
+      // work that, with server storage, reaches every device.
+      this.destroySocketClient();
+      LocalData.fileStorage.reset();
+
+      const elements = this.excalidrawAPI
+        .getSceneElementsIncludingDeleted()
+        .map((element) => {
+          if (isImageElement(element) && element.status === "saved") {
+            return newElementWith(element, { status: "pending" });
+          }
+          return element;
+        });
+
+      void this.props.onAdoptRoomContent(elements);
     } else if (window.confirm(t("alerts.collabStopOverridePrompt"))) {
+      // Legacy path, still used when no workspace is wired up (collab-only
+      // embeds and the tests).
       // hack to ensure that we prefer we disregard any new browser state
       // that could have been saved in other tabs while we were collaborating
       resetBrowserStateVersions();
@@ -515,9 +544,20 @@ class Collab extends PureComponent<CollabProps, CollabState> {
     this.setIsCollaborating(true);
     LocalData.pauseSave("collaboration");
 
-    const { default: socketIOClient } = await import(
-      /* webpackChunkName: "socketIoClient" */ "socket.io-client"
-    );
+    let socketIOClient: typeof import("socket.io-client").default;
+    try {
+      ({ default: socketIOClient } = await import(
+        /* webpackChunkName: "socketIoClient" */ "socket.io-client"
+      ));
+    } catch (error: any) {
+      // The lock is released here and in the catch below because it is only
+      // otherwise released by destroySocketClient — so a failed connect used
+      // to freeze ALL local persistence for the lifetime of the tab, silently.
+      this.setIsCollaborating(false);
+      LocalData.resumeSave("collaboration");
+      this.setErrorDialog(error.message);
+      return null;
+    }
 
     const fallbackInitializationHandler = () => {
       this.initializeRoom({
@@ -541,6 +581,8 @@ class Collab extends PureComponent<CollabProps, CollabState> {
       this.portal.socket.once("connect_error", fallbackInitializationHandler);
     } catch (error: any) {
       console.error(error);
+      this.setIsCollaborating(false);
+      LocalData.resumeSave("collaboration");
       this.setErrorDialog(error.message);
       return null;
     }

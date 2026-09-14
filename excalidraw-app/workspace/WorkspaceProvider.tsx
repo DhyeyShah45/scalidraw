@@ -30,6 +30,7 @@ import {
 } from "../data/workspace";
 
 import { loadGlobalPrefs, saveGlobalPrefs } from "./globalPrefs";
+import { migrateLegacyScene } from "./migration";
 import {
   navigateToDocument,
   onDocumentRouteChange,
@@ -59,6 +60,12 @@ type WorkspaceContextValue = {
   renameDocument: (id: DocumentId, name: string) => Promise<void>;
   deleteDocument: (id: DocumentId) => Promise<void>;
   duplicateDocument: (id: DocumentId) => Promise<void>;
+  /** Takes a scene the editor already holds and stores it as a new document. */
+  adoptScene: (
+    elements: readonly ExcalidrawElement[],
+    files: BinaryFiles,
+    name?: string,
+  ) => Promise<void>;
   handleChange: (
     elements: readonly ExcalidrawElement[],
     appState: AppState,
@@ -210,7 +217,28 @@ export const WorkspaceProvider = ({
 
     try {
       await workspaceApi.session();
-      const available = await store.listDocuments();
+      let available = await store.listDocuments();
+
+      // Bring the pre-documents localStorage scene across on first run. It is
+      // only ever attempted once, and the original is left untouched.
+      const migration = await migrateLegacyScene({
+        store,
+        onDocumentCreated: (id) => {
+          currentIdRef.current = id;
+        },
+        uploadFiles: (elements, files) =>
+          fileManager.saveFiles({ elements, files }).then(() => undefined),
+      }).catch((error) => {
+        // A failed import must not keep the app from starting — the legacy
+        // data is still in localStorage, so it can be retried.
+        console.error("could not import the previous canvas", error);
+        return { migrated: false } as const;
+      });
+
+      if (migration.migrated) {
+        available = await store.listDocuments();
+      }
+
       setDocuments(available);
       await resolveInitialDocument(available);
       setStatus("ready");
@@ -222,7 +250,7 @@ export const WorkspaceProvider = ({
       setError(caught instanceof Error ? caught.message : String(caught));
       setStatus("error");
     }
-  }, [store, resolveInitialDocument]);
+  }, [store, resolveInitialDocument, fileManager]);
 
   useEffect(() => {
     void boot();
@@ -316,6 +344,36 @@ export const WorkspaceProvider = ({
     [store, refreshDocuments, openDocument],
   );
 
+  /**
+   * Used when a collaboration session ends and the user keeps the room's work
+   * (D17). It lands as its own document rather than being written over
+   * whichever document was open when the session started.
+   */
+  const adoptScene = useCallback(
+    async (
+      elements: readonly ExcalidrawElement[],
+      sceneFiles: BinaryFiles,
+      name?: string,
+    ) => {
+      const created = await store.createDocument(
+        name ?? `Shared session ${new Date().toLocaleDateString()}`,
+      );
+
+      // Point the file handlers at the new document before uploading, so the
+      // images are refcounted against it and not the previous one.
+      currentIdRef.current = created.id;
+      if (Object.keys(sceneFiles).length) {
+        await fileManager.saveFiles({ elements, files: sceneFiles });
+      }
+
+      await store.save(created.id, elements, {}, Object.keys(sceneFiles));
+      await store.flushNow();
+      await refreshDocuments();
+      openDocument(created.id);
+    },
+    [store, fileManager, refreshDocuments, openDocument],
+  );
+
   // -------------------------------------------------------------------- saves
 
   const persistPrefs = useMemo(
@@ -398,7 +456,10 @@ export const WorkspaceProvider = ({
     persistPrefs.flush();
     persistScene.flush();
     await store.flushNow();
-  }, [store, persistPrefs, persistScene]);
+    // Images ride the same guarantee as scenes: anything that could not be
+    // uploaded is retried here rather than sitting in the cache forever.
+    await files.flushPendingUploads();
+  }, [store, persistPrefs, persistScene, files]);
 
   const resolveConflict = useCallback(
     async (keep: "local" | "server") => {
@@ -442,7 +503,10 @@ export const WorkspaceProvider = ({
         void flush();
       }
     };
-    const onOnline = () => store.retry();
+    const onOnline = () => {
+      store.retry();
+      void files.flushPendingUploads();
+    };
 
     document.addEventListener("visibilitychange", onHidden);
     window.addEventListener("online", onOnline);
@@ -450,7 +514,7 @@ export const WorkspaceProvider = ({
       document.removeEventListener("visibilitychange", onHidden);
       window.removeEventListener("online", onOnline);
     };
-  }, [flush, store]);
+  }, [flush, store, files]);
 
   const value = useMemo(
     (): WorkspaceContextValue => ({
@@ -466,6 +530,7 @@ export const WorkspaceProvider = ({
       renameDocument,
       deleteDocument,
       duplicateDocument,
+      adoptScene,
       handleChange,
       flush,
       resolveConflict,
@@ -486,6 +551,7 @@ export const WorkspaceProvider = ({
       renameDocument,
       deleteDocument,
       duplicateDocument,
+      adoptScene,
       handleChange,
       flush,
       resolveConflict,

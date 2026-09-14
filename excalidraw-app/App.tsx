@@ -1143,7 +1143,15 @@ const ExcalidrawWrapper = () => {
           />
         )}
         {excalidrawAPI && !isCollabDisabled && (
-          <Collab excalidrawAPI={excalidrawAPI} />
+          <Collab
+            excalidrawAPI={excalidrawAPI}
+            onAdoptRoomContent={
+              workspaceOwnsScene
+                ? (elements) =>
+                    workspace.adoptScene(elements, excalidrawAPI.getFiles())
+                : undefined
+            }
+          />
         )}
 
         <ShareDialog

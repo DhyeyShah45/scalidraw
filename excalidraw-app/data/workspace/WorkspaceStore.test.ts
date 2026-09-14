@@ -467,3 +467,90 @@ describe("WorkspaceStore — queue robustness", () => {
     expect((await cache.get("doc-1"))!.elements).toEqual([element("mine")]);
   });
 });
+
+describe("two tabs on the same document", () => {
+  let server: FakeWorkspaceServer;
+  let cache: SceneCache;
+
+  /** Separate store instances over ONE cache — that is what two tabs are. */
+  const openTab = (states?: SyncState[]) =>
+    new WorkspaceStore({
+      cache,
+      api: server.api,
+      flushDebounceMs: 100_000,
+      onSyncState: (state) => states?.push(state),
+    });
+
+  beforeEach(async () => {
+    server = new FakeWorkspaceServer();
+    cache = new SceneCache(createMemoryKV());
+    server.seed("doc-1");
+  });
+
+  it("refuses to silently overwrite the other tab's work", async () => {
+    const tabA = openTab();
+    const bStates: SyncState[] = [];
+    const tabB = openTab(bStates);
+
+    await tabA.loadDocument("doc-1");
+    await tabB.loadDocument("doc-1");
+
+    await tabA.save("doc-1", [element("from-a")], {});
+    await tabB.save("doc-1", [element("from-b")], {});
+
+    // Sharing a cache record means they share a `version` too, so the
+    // server's If-Match check cannot see them diverge — without this guard
+    // B's save would just replace A's with nothing to catch it.
+    expect(bStates.at(-1)).toMatchObject({
+      status: "conflict",
+      documentId: "doc-1",
+    });
+    expect((await cache.get("doc-1"))!.elements).toEqual([element("from-a")]);
+  });
+
+  it("lets a single tab save repeatedly without ever conflicting", async () => {
+    const states: SyncState[] = [];
+    const tab = openTab(states);
+    await tab.loadDocument("doc-1");
+
+    for (let i = 0; i < 5; i++) {
+      await tab.save("doc-1", [element(`el-${i}`)], {});
+    }
+    await tab.flushNow();
+
+    expect(states.some((state) => state.status === "conflict")).toBe(false);
+    expect(server.scenes.get("doc-1")!.elements).toEqual([element("el-4")]);
+  });
+
+  it("does not conflict after a reload, which is a new tab id", async () => {
+    const first = openTab();
+    await first.loadDocument("doc-1");
+    await first.save("doc-1", [element("a")], {});
+    await first.flushNow();
+
+    // Same browser, fresh page: new store, new tab id, same cache.
+    const states: SyncState[] = [];
+    const reloaded = openTab(states);
+    await reloaded.loadDocument("doc-1");
+    await reloaded.save("doc-1", [element("b")], {});
+
+    expect(states.some((state) => state.status === "conflict")).toBe(false);
+  });
+
+  it("the losing tab can keep its own version", async () => {
+    const tabA = openTab();
+    const tabB = openTab();
+    await tabA.loadDocument("doc-1");
+    await tabB.loadDocument("doc-1");
+
+    await tabA.save("doc-1", [element("from-a")], {});
+    await tabA.flushNow();
+    await tabB.save("doc-1", [element("from-b")], {});
+
+    await tabB.save("doc-1", [element("from-b")], {});
+    await tabB.resolveWithLocal("doc-1");
+    await tabB.flushNow();
+
+    expect(server.scenes.get("doc-1")!.elements).toEqual([element("from-b")]);
+  });
+});

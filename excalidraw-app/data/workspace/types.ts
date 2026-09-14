@@ -39,6 +39,12 @@ export type SceneRecord = {
   revision: number;
   /** Consecutive failed pushes, used to stop retrying a poisoned record. */
   failures?: number;
+  /**
+   * Which browser tab last wrote this record. Two tabs on one document share
+   * a cache entry and therefore a `version`, so the server's If-Match check
+   * cannot see them diverge — this is what restores that protection locally.
+   */
+  lastWriterTab?: string;
   updatedAt: number;
 };
 

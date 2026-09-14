@@ -58,6 +58,10 @@ export class WorkspaceStore {
   private readonly onDocumentReplaced?: (document: LoadedDocument) => void;
 
   private documents = new Map<DocumentId, DocumentMeta>();
+  /** Identifies this tab for the same-document multi-tab check. */
+  private readonly tabId = Math.random().toString(36).slice(2);
+  /** Revision this tab believes each document is at. */
+  private knownRevision = new Map<DocumentId, number>();
   /** In-flight flush, so callers can await the push actually completing. */
   private currentFlush: Promise<void> | null = null;
   /** Set while a flush is in flight and another save lands. */
@@ -147,6 +151,7 @@ export class WorkspaceStore {
         // show, so say so rather than inventing a local scratch document.
         throw new NetworkError("Document unavailable offline");
       }
+      this.knownRevision.set(id, cached.revision);
       return {
         meta: this.metaFor(id, cached),
         elements: cached.elements,
@@ -158,6 +163,7 @@ export class WorkspaceStore {
     this.documents.set(id, remote.document);
 
     if (cached?.dirty) {
+      this.knownRevision.set(id, cached.revision);
       this.scheduleFlush();
       return {
         meta: remote.document,
@@ -177,6 +183,7 @@ export class WorkspaceStore {
       updatedAt: remote.document.updatedAt,
     };
     await this.cache.put(record);
+    this.knownRevision.set(id, record.revision);
 
     return {
       meta: remote.document,
@@ -225,6 +232,21 @@ export class WorkspaceStore {
     const existing = await this.cache.get(id);
     const { document: documentAppState } = splitAppState(appState);
 
+    if (this.writtenByAnotherTab(id, existing)) {
+      // Another tab edited this document since we loaded it. Overwriting the
+      // shared cache record here would discard that tab's work with no 409 to
+      // catch it, so surface the same prompt two devices would get.
+      await this.cache.update(id, {
+        conflictedWithVersion: existing!.version,
+      });
+      this.onSyncState({
+        status: "conflict",
+        documentId: id,
+        serverVersion: existing!.version,
+      });
+      return;
+    }
+
     await this.cache.put({
       id,
       elements,
@@ -235,14 +257,30 @@ export class WorkspaceStore {
       dirty: true,
       conflictedWithVersion: existing?.conflictedWithVersion,
       revision: (existing?.revision ?? 0) + 1,
+      lastWriterTab: this.tabId,
       // A fresh edit deserves a fresh attempt at a record we had given up on.
       failures: 0,
       updatedAt: Date.now(),
     });
 
+    this.knownRevision.set(id, (existing?.revision ?? 0) + 1);
+
     this.pendingFileIds.set(id, [
       ...new Set([...(this.pendingFileIds.get(id) ?? []), ...fileIds]),
     ]);
+  }
+
+  private writtenByAnotherTab(
+    id: DocumentId,
+    existing: SceneRecord | undefined,
+  ) {
+    return (
+      !!existing &&
+      existing.conflictedWithVersion === undefined &&
+      !!existing.lastWriterTab &&
+      existing.lastWriterTab !== this.tabId &&
+      existing.revision > (this.knownRevision.get(id) ?? 0)
+    );
   }
 
   private saveChain = new Map<DocumentId, Promise<void>>();
@@ -443,8 +481,10 @@ export class WorkspaceStore {
       dirty: false,
       revision: 0,
       failures: 0,
+      lastWriterTab: this.tabId,
       updatedAt: remote.document.updatedAt,
     });
+    this.knownRevision.set(id, 0);
 
     const loaded: LoadedDocument = {
       meta: remote.document,
@@ -468,7 +508,9 @@ export class WorkspaceStore {
       version: record.conflictedWithVersion,
       conflictedWithVersion: undefined,
       dirty: true,
+      lastWriterTab: this.tabId,
     });
+    this.knownRevision.set(id, record.revision);
     await this.flush();
   }
 

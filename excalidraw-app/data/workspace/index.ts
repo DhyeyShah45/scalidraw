@@ -21,6 +21,7 @@ export {
   NotFoundError,
   WorkspaceApiError,
 } from "./api";
+export type { KVStore } from "./kv";
 export type { LoadedDocument, WorkspaceStoreOptions } from "./WorkspaceStore";
 export type { DocumentId, DocumentMeta, SceneRecord, SyncState } from "./types";
 

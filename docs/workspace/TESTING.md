@@ -115,6 +115,13 @@ sqlite3 server/data/workspace.db \
   "UPDATE documents SET deleted_at = NULL WHERE name = 'the one you deleted';"
 ```
 
+### Phase 4 additions
+
+- [ ] **Your old canvas is imported.** On first sign-in, whatever was on excalidraw.com in this browser appears as a canvas called "Imported canvas", images included. It only happens once, and the original is left in localStorage untouched.
+- [ ] **Two tabs on the same canvas.** Open the same `/d/<id>` twice, draw in each. The second one to save should get the "changed somewhere else" prompt rather than silently overwriting the first. (Two tabs on _different_ canvases should never interfere at all.)
+- [ ] **Images survive being pasted offline.** Go offline, paste an image, come back online. It should upload on its own — previously the bytes sat in local cache forever with nothing retrying.
+- [ ] **Ending a collab session keeps its work separately.** Start a session, draw, then "Stop session". The room's contents should land as a _new_ canvas ("Shared session <date>"), not overwrite the canvas you had open before starting.
+
 ## Not built yet
 
 Do not test for these — they are phase 4 and 5:
