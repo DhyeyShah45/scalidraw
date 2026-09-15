@@ -113,6 +113,21 @@ export const WorkspaceProvider = ({
 
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const currentIdRef = useRef<DocumentId | null>(null);
+  /**
+   * Name of the open document, in a ref so `handleChange` stays stable.
+   *
+   * The editor has its own project-name field in the export dialog, which
+   * writes `appState.name`. That field is not part of the per-document
+   * appState we persist (the name belongs to the documents table), so without
+   * syncing it back the rename would look like it worked and then vanish on
+   * the next load.
+   *
+   * Note it only renders in browsers WITHOUT the File System Access API
+   * (ImageExportDialog gates it on `!nativeFileSystemSupported`), so it is
+   * reachable in Firefox and Safari but hidden in Chrome — which is why the
+   * Chrome-based e2e suite covers the sidebar rename and not this path.
+   */
+  const openNameRef = useRef<string | null>(null);
 
   const workspace = useMemo(
     () =>
@@ -161,6 +176,8 @@ export const WorkspaceProvider = ({
       const { loadedFiles } = fileIds.length
         ? await fileManager.getFiles(fileIds)
         : { loadedFiles: [] };
+
+      openNameRef.current = loaded.meta.name;
 
       setOpen({
         meta: loaded.meta,
@@ -318,6 +335,7 @@ export const WorkspaceProvider = ({
       const updated = await store.renameDocument(id, name);
       await refreshDocuments();
       if (id === currentIdRef.current) {
+        openNameRef.current = name;
         setOpen((previous) =>
           previous ? { ...previous, meta: updated } : previous,
         );
@@ -412,6 +430,29 @@ export const WorkspaceProvider = ({
     [store],
   );
 
+  /** Debounced: the export dialog's name field fires on every keystroke. */
+  const syncName = useMemo(
+    () =>
+      debounce((id: DocumentId, name: string) => {
+        void store
+          .renameDocument(id, name)
+          .then(async (updated) => {
+            openNameRef.current = updated.name;
+            setDocuments(await store.listDocuments());
+            setOpen((previous) =>
+              previous?.meta.id === id
+                ? { ...previous, meta: updated }
+                : previous,
+            );
+          })
+          .catch(() => {
+            // A failed rename is not worth interrupting drawing over; the
+            // next edit retries and the sidebar still shows the old name.
+          });
+      }, 800),
+    [store],
+  );
+
   const saveImages = useCallback(
     async (elements: readonly ExcalidrawElement[], sceneFiles: BinaryFiles) => {
       await fileManager.saveFiles({ elements, files: sceneFiles });
@@ -456,23 +497,34 @@ export const WorkspaceProvider = ({
 
       persistPrefs(appState);
 
+      const editorName = appState.name?.trim();
+      if (
+        editorName &&
+        openNameRef.current !== null &&
+        editorName !== openNameRef.current
+      ) {
+        openNameRef.current = editorName;
+        syncName(id, editorName);
+      }
+
       persistScene(id, elements, appState, Object.keys(sceneFiles));
 
       if (elements.some(isInitializedImageElement)) {
         void saveImages(elements, sceneFiles);
       }
     },
-    [persistPrefs, persistScene, saveImages],
+    [persistPrefs, persistScene, saveImages, syncName],
   );
 
   const flush = useCallback(async () => {
     persistPrefs.flush();
     persistScene.flush();
+    syncName.flush();
     await store.flushNow();
     // Images ride the same guarantee as scenes: anything that could not be
     // uploaded is retried here rather than sitting in the cache forever.
     await files.flushPendingUploads();
-  }, [store, persistPrefs, persistScene, files]);
+  }, [store, persistPrefs, persistScene, syncName, files]);
 
   const resolveConflict = useCallback(
     async (keep: "local" | "server") => {

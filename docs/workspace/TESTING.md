@@ -90,7 +90,7 @@ Needs two browser windows on the same canvas.
 
 ### Sidebar actions
 
-- [ ] Rename by double-clicking a canvas name. Enter commits, Escape cancels.
+- [ ] Rename by double-clicking a canvas name in the sidebar. Enter commits, Escape cancels, and the URL does not change — the id in `/d/<id>` is random and has nothing to do with the name.
 - [ ] Search filters the list.
 - [ ] Duplicate creates "<name> (copy)" and opens it; editing the copy does not change the original.
 - [ ] Delete asks for confirmation, and deleting the open canvas moves you to another one.
