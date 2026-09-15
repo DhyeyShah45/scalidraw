@@ -1,66 +1,131 @@
+/*
+ * The sign-in and boot screens render OUTSIDE the .excalidraw container, so
+ * none of the editor's CSS custom properties exist there — referencing them
+ * produces invalid declarations, which is why the password field was once
+ * invisible against its card. These two are self-contained on purpose.
+ *
+ * Everything below them renders inside the editor and may use its variables.
+ */
+.workspace-login,
+.workspace-boot {
+  --w-bg: #ffffff;
+  --w-card: #ffffff;
+  --w-text: #1b1b1f;
+  --w-muted: #6b6b73;
+  --w-border: #d6d6dc;
+  --w-accent: #6965db;
+  --w-danger: #c92a2a;
+  --w-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+
+  font-family: "Assistant", "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--w-text);
+}
+
+@media (prefers-color-scheme: dark) {
+  .workspace-login,
+  .workspace-boot {
+    --w-bg: #121212;
+    --w-card: #1e1e1e;
+    --w-text: #e3e3e8;
+    --w-muted: #9a9aa3;
+    --w-border: #3a3a42;
+    --w-accent: #a8a5ff;
+    --w-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+  }
+}
+
 .workspace-login {
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100vh;
   padding: 1.5rem;
-  background: var(--default-bg-color, #fff);
+  background: var(--w-bg);
 
   &__card {
+    box-sizing: border-box;
     width: 100%;
     max-width: 22rem;
     display: flex;
     flex-direction: column;
+    align-items: stretch;
+    text-align: left;
     padding: 2rem;
     border-radius: 0.75rem;
-    background: var(--island-bg-color, #fff);
-    box-shadow: var(--shadow-island, 0 1px 8px rgba(0, 0, 0, 0.12));
+    background: var(--w-card);
+    box-shadow: var(--w-shadow);
   }
 
   &__title {
     margin: 0;
     font-size: 1.5rem;
     font-weight: 700;
-    color: var(--text-primary-color);
+    line-height: 1.2;
   }
 
   &__subtitle {
     margin: 0.25rem 0 1.5rem;
     font-size: 0.875rem;
-    color: var(--color-gray-60);
+    color: var(--w-muted);
   }
 
   &__label {
+    display: block;
     font-size: 0.75rem;
     font-weight: 600;
     margin-bottom: 0.375rem;
-    color: var(--text-primary-color);
   }
 
   &__input {
+    box-sizing: border-box;
+    width: 100%;
     height: 2.5rem;
     padding: 0 0.75rem;
-    border: 1px solid var(--default-border-color, var(--color-gray-30));
+    border: 1px solid var(--w-border);
     border-radius: 0.5rem;
-    background: var(--input-bg-color, #fff);
-    color: var(--text-primary-color);
+    background: var(--w-card);
+    color: var(--w-text);
     font-size: 0.875rem;
+    font-family: inherit;
 
     &:focus {
       outline: none;
-      border-color: var(--color-primary);
-      box-shadow: 0 0 0 1px var(--color-primary);
+      border-color: var(--w-accent);
+      box-shadow: 0 0 0 2px rgba(105, 101, 219, 0.25);
     }
   }
 
   &__error {
     margin-top: 0.75rem;
     font-size: 0.8125rem;
-    color: var(--color-danger, #c92a2a);
+    color: var(--w-danger);
   }
 
   &__submit {
     margin-top: 1.25rem;
+  }
+}
+
+.workspace-boot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1.5rem;
+  text-align: center;
+  background: var(--w-bg);
+  font-size: 0.9375rem;
+
+  p {
+    margin: 0;
+  }
+
+  &__detail {
+    font-size: 0.8125rem;
+    color: var(--w-muted);
+    max-width: 32rem;
   }
 }
 
@@ -75,8 +140,8 @@
   font-size: 0.75rem;
   font-family: inherit;
   background: var(--island-bg-color, #fff);
-  color: var(--text-primary-color);
-  box-shadow: var(--shadow-island, 0 0 0 1px rgba(0, 0, 0, 0.06));
+  color: var(--text-primary-color, #1b1b1f);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
 
   &__dot {
     width: 0.5rem;
@@ -86,14 +151,14 @@
     flex: 0 0 auto;
   }
 
-  &--busy &__dot {
-    background: var(--color-primary);
+  &--busy {
+    color: var(--color-primary, #6965db);
   }
   &--warn {
     color: #b35c00;
   }
   &--danger {
-    color: var(--color-danger, #c92a2a);
+    color: #c92a2a;
   }
 }
 
@@ -112,7 +177,7 @@
   &__note {
     margin: 0;
     font-size: 0.75rem;
-    color: var(--color-gray-60);
+    color: var(--color-gray-60, #6b6b73);
   }
 }
 
@@ -135,18 +200,20 @@
     align-items: center;
 
     input {
+      box-sizing: border-box;
       width: 100%;
       height: 2rem;
       padding: 0 0.5rem 0 1.85rem;
-      border: 1px solid var(--default-border-color, var(--color-gray-30));
+      border: 1px solid var(--default-border-color, #d6d6dc);
       border-radius: 0.5rem;
       background: var(--input-bg-color, #fff);
-      color: var(--text-primary-color);
+      color: var(--text-primary-color, #1b1b1f);
       font-size: 0.8125rem;
+      font-family: inherit;
 
       &:focus {
         outline: none;
-        border-color: var(--color-primary);
+        border-color: var(--color-primary, #6965db);
       }
     }
   }
@@ -157,7 +224,7 @@
     display: flex;
     width: 0.9rem;
     height: 0.9rem;
-    color: var(--color-gray-60);
+    color: var(--color-gray-60, #6b6b73);
     pointer-events: none;
 
     svg {
@@ -172,10 +239,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid var(--default-border-color, var(--color-gray-30));
+    border: 1px solid var(--default-border-color, #d6d6dc);
     border-radius: 0.5rem;
     background: transparent;
-    color: var(--text-primary-color);
+    color: var(--text-primary-color, #1b1b1f);
     cursor: pointer;
 
     svg {
@@ -184,7 +251,7 @@
     }
 
     &:hover {
-      background: var(--button-hover-bg, var(--color-gray-10));
+      background: var(--button-hover-bg, rgba(0, 0, 0, 0.05));
     }
   }
 
@@ -192,7 +259,7 @@
     padding: 1rem 0.75rem;
     margin: 0;
     font-size: 0.8125rem;
-    color: var(--color-gray-60);
+    color: var(--color-gray-60, #6b6b73);
   }
 
   &__list {
@@ -209,11 +276,11 @@
     border-radius: 0.5rem;
 
     &:hover {
-      background: var(--button-hover-bg, var(--color-gray-10));
+      background: var(--button-hover-bg, rgba(0, 0, 0, 0.05));
     }
 
     &.is-open {
-      background: var(--color-primary-light);
+      background: var(--color-primary-light, rgba(105, 101, 219, 0.15));
     }
 
     &--confirm {
@@ -237,10 +304,10 @@
       font-family: inherit;
       padding: 0.2rem 0.4rem;
       border-radius: 0.25rem;
-      color: var(--text-primary-color);
+      color: var(--text-primary-color, #1b1b1f);
 
       &:first-child {
-        color: var(--color-danger, #c92a2a);
+        color: #c92a2a;
         font-weight: 600;
       }
     }
@@ -259,7 +326,7 @@
     cursor: pointer;
     text-align: left;
     font-family: inherit;
-    color: var(--text-primary-color);
+    color: var(--text-primary-color, #1b1b1f);
   }
 
   &__name {
@@ -272,7 +339,7 @@
 
   &__meta {
     font-size: 0.6875rem;
-    color: var(--color-gray-60);
+    color: var(--color-gray-60, #6b6b73);
   }
 
   &__rename {
@@ -280,10 +347,10 @@
     font-size: 0.875rem;
     font-family: inherit;
     padding: 0.15rem 0.25rem;
-    border: 1px solid var(--color-primary);
+    border: 1px solid var(--color-primary, #6965db);
     border-radius: 0.25rem;
     background: var(--input-bg-color, #fff);
-    color: var(--text-primary-color);
+    color: var(--text-primary-color, #1b1b1f);
   }
 
   &__actions {
@@ -301,7 +368,7 @@
       border-radius: 0.25rem;
       background: transparent;
       cursor: pointer;
-      color: var(--color-gray-60);
+      color: var(--color-gray-60, #6b6b73);
 
       svg {
         width: 0.9rem;
@@ -309,8 +376,8 @@
       }
 
       &:hover {
-        background: var(--button-hover-bg, var(--color-gray-20));
-        color: var(--text-primary-color);
+        background: var(--button-hover-bg, rgba(0, 0, 0, 0.08));
+        color: var(--text-primary-color, #1b1b1f);
       }
     }
   }
@@ -318,29 +385,5 @@
   &__row:hover &__actions,
   &__row.is-open &__actions {
     display: flex;
-  }
-}
-
-.workspace-boot {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 1.5rem;
-  text-align: center;
-  background: var(--default-bg-color, #fff);
-  color: var(--text-primary-color);
-  font-size: 0.9375rem;
-
-  p {
-    margin: 0;
-  }
-
-  &__detail {
-    font-size: 0.8125rem;
-    color: var(--color-gray-60);
-    max-width: 32rem;
   }
 }

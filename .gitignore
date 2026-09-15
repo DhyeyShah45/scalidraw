@@ -31,3 +31,4 @@ meta*.json
 # self-hosted workspace server
 server/data
 server/.env
+e2e/shots

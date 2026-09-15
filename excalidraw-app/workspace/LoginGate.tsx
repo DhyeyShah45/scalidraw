@@ -18,8 +18,8 @@ export const LoginGate = () => {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const submit = async (event?: React.FormEvent) => {
+    event?.preventDefault();
     if (busy || !password) {
       return;
     }
@@ -63,6 +63,11 @@ export const LoginGate = () => {
 
         {error && <div className="workspace-login__error">{error}</div>}
 
+        {/*
+          FilledButton hardcodes type="button", so it never submits the form
+          around it — the click has to invoke the handler directly. The form's
+          onSubmit is still what handles pressing Enter in the field.
+        */}
         <FilledButton
           className="workspace-login__submit"
           label="Sign in"
@@ -70,7 +75,7 @@ export const LoginGate = () => {
           fullWidth
           status={busy ? "loading" : null}
           disabled={busy || !password}
-          onClick={() => {}}
+          onClick={() => void submit()}
         >
           Sign in
         </FilledButton>

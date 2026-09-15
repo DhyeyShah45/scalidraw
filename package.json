@@ -42,7 +42,8 @@
     "vite-plugin-pwa": "0.21.1",
     "vite-plugin-svgr": "4.2.0",
     "vitest": "3.0.6",
-    "vitest-canvas-mock": "0.3.3"
+    "vitest-canvas-mock": "0.3.3",
+    "puppeteer-core": "23.11.1"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -92,7 +93,8 @@
     "clean-install": "yarn rm:node_modules && yarn install",
     "test:server": "yarn --cwd ./server test",
     "start:server": "yarn --cwd ./server dev",
-    "build:server": "yarn --cwd ./server build"
+    "build:server": "yarn --cwd ./server build",
+    "test:e2e": "node e2e/run.mjs"
   },
   "resolutions": {
     "strip-ansi": "6.0.1"

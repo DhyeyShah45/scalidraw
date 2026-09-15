@@ -5,15 +5,30 @@ import { WelcomeScreen } from "@excalidraw/excalidraw/index";
 import React from "react";
 
 import { isExcalidrawPlusSignedUser } from "../app_constants";
+import { useWorkspace } from "../workspace/WorkspaceProvider";
 
 export const AppWelcomeScreen: React.FC<{
   onCollabDialogOpen: () => any;
   isCollabEnabled: boolean;
 }> = React.memo((props) => {
   const { t } = useI18n();
+  const { open: openDocument } = useWorkspace();
   let headingContent;
 
-  if (isExcalidrawPlusSignedUser) {
+  if (openDocument) {
+    // The stock copy says drawings live in browser storage and urges saving to
+    // a file. With a server-backed workspace that is simply false, and telling
+    // someone their work is at risk when it is not is worse than saying
+    // nothing. Overridden here rather than in the shared locale file, which
+    // upstream owns and which would conflict on every pull.
+    headingContent = (
+      <>
+        Saved to your workspace.
+        <br />
+        Every canvas syncs automatically.
+      </>
+    );
+  } else if (isExcalidrawPlusSignedUser) {
     headingContent = t("welcomeScreen.app.center_heading_plus")
       .split(/(Excalidraw\+)/)
       .map((bit, idx) => {

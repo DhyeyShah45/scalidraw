@@ -95,6 +95,33 @@ Needs two browser windows on the same canvas.
 - [ ] Duplicate creates "<name> (copy)" and opens it; editing the copy does not change the original.
 - [ ] Delete asks for confirmation, and deleting the open canvas moves you to another one.
 
+## Automated browser checks
+
+Unit tests cannot tell you the UI is wired up. Two bugs shipped past ~2000 passing tests and were obvious on the first real page load: the sign-in button never submitted (`FilledButton` hardcodes `type="button"`), and the password field was styled with CSS variables that only exist inside the editor, so it rendered invisible.
+
+So there is now a real-browser suite:
+
+```bash
+corepack yarn build:app && corepack yarn build:server
+corepack yarn test:e2e
+```
+
+It boots a real server against a throwaway database, drives a real Chrome against the production build, and tears both down. Nothing is mocked.
+
+Needs a Chrome binary. If `~/.cache/puppeteer` is empty:
+
+```bash
+npx puppeteer browsers install chrome
+```
+
+Useful flags:
+
+- `E2E_HEADED=1 corepack yarn test:e2e` — watch it happen in a visible window.
+- `corepack yarn test:e2e documents` — run one suite by name.
+- `CHROME_PATH=/usr/bin/chromium corepack yarn test:e2e` — use your own binary.
+
+What it covers: sign-in (button _and_ Enter key), autosave reaching the server, surviving a reload, the sidebar, creating and switching canvases, **undo not crossing documents**, browser Back, the offline queue including across a reload, and two tabs on one canvas raising the conflict prompt.
+
 ## Poking at the data
 
 Everything lives in one SQLite file — `server/data/workspace.db`.
