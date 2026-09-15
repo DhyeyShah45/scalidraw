@@ -52,7 +52,6 @@ type WorkspaceContextValue = {
   error: string | null;
   documents: DocumentMeta[];
   open: OpenDocument | null;
-  syncState: SyncState;
   signIn: (password: string) => Promise<void>;
   signOut: () => Promise<void>;
   openDocument: (id: DocumentId) => void;
@@ -78,6 +77,17 @@ type WorkspaceContextValue = {
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
+/**
+ * Sync state lives in its own context because it changes on every save.
+ *
+ * Keeping it in the main value re-rendered the whole editor on each tick, and
+ * re-rendering <Excalidraw> makes it emit onChange — which saves, which ticks
+ * sync state again. That feedback loop wrote to the server about once a second
+ * on a completely idle canvas, inflating the version and filling the snapshot
+ * history with identical scenes.
+ */
+const SyncStateContext = createContext<SyncState>({ status: "idle" });
+
 export const useWorkspace = () => {
   const value = useContext(WorkspaceContext);
   if (!value) {
@@ -85,6 +95,8 @@ export const useWorkspace = () => {
   }
   return value;
 };
+
+export const useSyncState = () => useContext(SyncStateContext);
 
 const NEW_DOCUMENT_NAME = "Untitled";
 
@@ -443,6 +455,7 @@ export const WorkspaceProvider = ({
       }
 
       persistPrefs(appState);
+
       persistScene(id, elements, appState, Object.keys(sceneFiles));
 
       if (elements.some(isInitializedImageElement)) {
@@ -522,7 +535,6 @@ export const WorkspaceProvider = ({
       error,
       documents,
       open,
-      syncState,
       signIn,
       signOut,
       openDocument,
@@ -543,7 +555,6 @@ export const WorkspaceProvider = ({
       error,
       documents,
       open,
-      syncState,
       signIn,
       signOut,
       openDocument,
@@ -560,7 +571,9 @@ export const WorkspaceProvider = ({
 
   return (
     <WorkspaceContext.Provider value={value}>
-      {children}
+      <SyncStateContext.Provider value={syncState}>
+        {children}
+      </SyncStateContext.Provider>
     </WorkspaceContext.Provider>
   );
 };

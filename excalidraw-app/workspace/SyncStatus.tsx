@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import React from "react";
 
-import { useWorkspace } from "./WorkspaceProvider";
+import { useSyncState, useWorkspace } from "./WorkspaceProvider";
 
 import "./workspace.scss";
 
@@ -13,7 +13,8 @@ import "./workspace.scss";
  * queued must be something they can see, not discover later.
  */
 export const SyncStatus = () => {
-  const { syncState, flush } = useWorkspace();
+  const syncState = useSyncState();
+  const { flush } = useWorkspace();
 
   const { label, tone, action } = describe(syncState);
   if (!label) {
@@ -33,7 +34,7 @@ export const SyncStatus = () => {
   );
 };
 
-const describe = (state: ReturnType<typeof useWorkspace>["syncState"]) => {
+const describe = (state: ReturnType<typeof useSyncState>) => {
   switch (state.status) {
     case "idle":
       return { label: null, tone: "ok", action: "" };

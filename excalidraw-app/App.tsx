@@ -383,8 +383,11 @@ const ExcalidrawWrapper = () => {
   // Destructured because the context object identity changes on every sync
   // state tick; these two are stable, and depending on the whole object would
   // re-register the global listeners below on each save.
-  const { flush: flushWorkspace, registerApi: registerWorkspaceApi } =
-    workspace;
+  const {
+    flush: flushWorkspace,
+    registerApi: registerWorkspaceApi,
+    handleChange: handleWorkspaceChange,
+  } = workspace;
 
   /**
    * The workspace owns the scene unless we are in a collab room, which still
@@ -758,61 +761,68 @@ const ExcalidrawWrapper = () => {
     };
   }, [excalidrawAPI]);
 
-  const onChange = (
-    elements: readonly OrderedExcalidrawElement[],
-    appState: AppState,
-    files: BinaryFiles,
-  ) => {
-    if (collabAPI?.isCollaborating()) {
-      collabAPI.syncElements(elements);
-    }
+  // Stable identity: a new function every render is a prop change on
+  // <Excalidraw>, and re-rendering the editor makes it emit onChange again.
+  const onChange = useCallback(
+    (
+      elements: readonly OrderedExcalidrawElement[],
+      appState: AppState,
+      files: BinaryFiles,
+    ) => {
+      if (collabAPI?.isCollaborating()) {
+        collabAPI.syncElements(elements);
+      }
 
-    if (workspaceOwnsScene) {
-      workspace.handleChange(elements, appState, files);
-    }
+      if (workspaceOwnsScene) {
+        handleWorkspaceChange(elements, appState, files);
+      }
 
-    // this check is redundant, but since this is a hot path, it's best
-    // not to evaludate the nested expression every time
-    if (!workspaceOwnsScene && !LocalData.isSavePaused()) {
-      LocalData.save(elements, appState, files, () => {
-        if (excalidrawAPI) {
-          let didChange = false;
+      // this check is redundant, but since this is a hot path, it's best
+      // not to evaludate the nested expression every time
+      if (!workspaceOwnsScene && !LocalData.isSavePaused()) {
+        LocalData.save(elements, appState, files, () => {
+          if (excalidrawAPI) {
+            let didChange = false;
 
-          const elements = excalidrawAPI
-            .getSceneElementsIncludingDeleted()
-            .map((element) => {
-              if (
-                LocalData.fileStorage.shouldUpdateImageElementStatus(element)
-              ) {
-                const newElement = newElementWith(element, { status: "saved" });
-                if (newElement !== element) {
-                  didChange = true;
+            const elements = excalidrawAPI
+              .getSceneElementsIncludingDeleted()
+              .map((element) => {
+                if (
+                  LocalData.fileStorage.shouldUpdateImageElementStatus(element)
+                ) {
+                  const newElement = newElementWith(element, {
+                    status: "saved",
+                  });
+                  if (newElement !== element) {
+                    didChange = true;
+                  }
+                  return newElement;
                 }
-                return newElement;
-              }
-              return element;
-            });
+                return element;
+              });
 
-          if (didChange) {
-            excalidrawAPI.updateScene({
-              elements,
-              captureUpdate: CaptureUpdateAction.NEVER,
-            });
+            if (didChange) {
+              excalidrawAPI.updateScene({
+                elements,
+                captureUpdate: CaptureUpdateAction.NEVER,
+              });
+            }
           }
-        }
-      });
-    }
+        });
+      }
 
-    // Render the debug scene if the debug canvas is available
-    if (debugCanvasRef.current && excalidrawAPI) {
-      debugRenderer(
-        debugCanvasRef.current,
-        appState,
-        elements,
-        window.devicePixelRatio,
-      );
-    }
-  };
+      // Render the debug scene if the debug canvas is available
+      if (debugCanvasRef.current && excalidrawAPI) {
+        debugRenderer(
+          debugCanvasRef.current,
+          appState,
+          elements,
+          window.devicePixelRatio,
+        );
+      }
+    },
+    [collabAPI, excalidrawAPI, workspaceOwnsScene, handleWorkspaceChange],
+  );
 
   const [latestShareableLink, setLatestShareableLink] = useState<string | null>(
     null,

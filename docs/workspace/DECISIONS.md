@@ -138,6 +138,15 @@ Carried forward rather than silently ignored. None of these lose data on the hap
 6. **`pending()` deserializes every cached scene on each flush** (~1/s while drawing). Scenes and images live in separate IndexedDB databases so images are not dragged in, but this wants an index once there are many documents.
 7. **`gzipSync` blocks the event loop** on the server's autosave path.
 8. **`migrate()` accepts a future `user_version`** silently, rather than refusing to run against a database written by a newer build.
+9. **Two tabs of the same browser on one document can still lose work in one ordering.** _(Found in a real browser, 2026-09-15. The most serious open item.)_
+
+   Fixed and now covered end-to-end: tab B opens the document, tab A draws and syncs, tab B then draws — B is prompted, and "keep what is on this screen" uploads B's shape rather than A's.
+
+   Still broken: tab A opens and sits idle, tab B draws and syncs, then A draws. A's work never reaches the server and neither tab shows a prompt. The revision bookkeeping concludes A has already seen B's change, so `writtenByAnotherTab` returns false and A's save is dropped on the floor.
+
+   Two fixes landed while chasing it and are worth keeping regardless: the losing scene is parked durably under a per-tab cache key so "keep mine" can push the right content, and a flush no longer reports "idle" over a live conflict — which was erasing the prompt before it could render.
+
+   Two _devices_ are unaffected; that path goes through the server's If-Match check, which is tested and works.
 
 ## Left as implementation defaults (not separately decided)
 

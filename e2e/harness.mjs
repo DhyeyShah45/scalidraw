@@ -150,6 +150,15 @@ const waitForHealth = async (base, server) => {
 
 export const newPage = async (browser) => {
   const page = await browser.newPage();
+
+  /*
+   * Without this only one page at a time is considered focused, and a drag
+   * dispatched to any other page is quietly ignored — so in a two-tab test
+   * whichever tab draws second appears to do nothing. That looks exactly like
+   * an application bug and is not one.
+   */
+  const client = await page.createCDPSession();
+  await client.send("Emulation.setFocusEmulationEnabled", { enabled: true });
   const errors = [];
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
@@ -180,6 +189,10 @@ export const signIn = async (page, base) => {
 };
 
 export const drawRect = async (page, x, y, w = 120, h = 90) => {
+  // Chrome throttles background tabs, and Excalidraw's canvas work is driven
+  // by requestAnimationFrame — a drag dispatched to a backgrounded page can
+  // simply never be processed. Multi-tab tests must foreground first.
+  await page.bringToFront();
   await page.keyboard.press("r");
   await page.mouse.move(x, y);
   await page.mouse.down();

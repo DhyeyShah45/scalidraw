@@ -45,6 +45,39 @@ export type WorkspaceStoreOptions = {
 const DEFAULT_FLUSH_DEBOUNCE = 1000;
 
 /**
+ * Content identity for a scene. Element `version` increments on every
+ * mutation, so summing them detects any edit, and the per-document appState
+ * covers viewport-only changes. Keys are sorted because JSON.stringify
+ * preserves insertion order and the same state can arrive ordered differently.
+ */
+export const sceneSignature = (
+  elements: readonly ExcalidrawElement[],
+  appState: Record<string, unknown>,
+) => {
+  /*
+   * Folds element identity in alongside the version counters. Summing
+   * versions alone is not enough: a missing `version` makes the sum NaN, and
+   * NaN compares equal for every scene of the same length, so two completely
+   * different canvases would look identical and a real save would be dropped
+   * as a no-op.
+   */
+  let identity = 0;
+  let versions = 0;
+  for (const element of elements) {
+    for (let i = 0; i < element.id.length; i++) {
+      identity = (identity * 31 + element.id.charCodeAt(i)) | 0;
+    }
+    identity = (identity * 31 + (element.version ?? 0)) | 0;
+    versions += element.version ?? 0;
+  }
+  const state = Object.keys(appState)
+    .sort()
+    .map((key) => `${key}=${JSON.stringify(appState[key])}`)
+    .join("&");
+  return `${elements.length}:${versions}:${identity}:${state}`;
+};
+
+/**
  * Owns everything between the editor and the server: the local cache, the
  * pending-write queue, conflict state, and the online/offline transitions.
  *
@@ -180,6 +213,10 @@ export class WorkspaceStore {
       version: remote.document.version,
       dirty: false,
       revision: 0,
+      syncedSignature: sceneSignature(
+        remote.elements as readonly ExcalidrawElement[],
+        remote.appState as Record<string, unknown>,
+      ),
       updatedAt: remote.document.updatedAt,
     };
     await this.cache.put(record);
@@ -231,11 +268,47 @@ export class WorkspaceStore {
   ) {
     const existing = await this.cache.get(id);
     const { document: documentAppState } = splitAppState(appState);
+    const signature = sceneSignature(
+      elements,
+      documentAppState as Record<string, unknown>,
+    );
+
+    if (
+      !existing?.dirty &&
+      existing?.syncedSignature !== undefined &&
+      existing.syncedSignature === signature
+    ) {
+      /*
+       * Byte-identical to what the server already holds, so there is nothing
+       * to send. This matters more than it sounds: the editor emits onChange
+       * on mount and on any re-render, and pushing those bumps the version for
+       * content nobody edited — which tells every other device the document
+       * changed and hands them a conflict prompt for a phantom edit. Checked
+       * before the cross-tab guard below, since a no-op is not a tab conflict.
+       */
+      return;
+    }
 
     if (this.writtenByAnotherTab(id, existing)) {
       // Another tab edited this document since we loaded it. Overwriting the
       // shared cache record here would discard that tab's work with no 409 to
       // catch it, so surface the same prompt two devices would get.
+      //
+      // Park this tab's scene rather than dropping it: the shared record now
+      // holds the OTHER tab's content, so without this "keep what is on this
+      // screen" would push their work and silently lose ours.
+      await this.cache.putContended(id, this.tabId, {
+        id,
+        elements,
+        appState: documentAppState,
+        version: existing!.version,
+        dirty: true,
+        revision: (existing!.revision ?? 0) + 1,
+        lastWriterTab: this.tabId,
+        failures: 0,
+        updatedAt: Date.now(),
+      });
+      this.awaitingResolution.add(id);
       await this.cache.update(id, {
         conflictedWithVersion: existing!.version,
       });
@@ -260,6 +333,7 @@ export class WorkspaceStore {
       lastWriterTab: this.tabId,
       // A fresh edit deserves a fresh attempt at a record we had given up on.
       failures: 0,
+      syncedSignature: existing?.syncedSignature,
       updatedAt: Date.now(),
     });
 
@@ -283,6 +357,8 @@ export class WorkspaceStore {
     );
   }
 
+  /** Documents whose conflict prompt is still waiting on the user. */
+  private awaitingResolution = new Set<DocumentId>();
   private saveChain = new Map<DocumentId, Promise<void>>();
   private pendingFileIds = new Map<DocumentId, string[]>();
 
@@ -346,9 +422,12 @@ export class WorkspaceStore {
     const blocked = pending.length - syncable.length;
 
     if (syncable.length === 0) {
-      // Only claim idle when nothing at all is outstanding — announcing it
-      // while a conflict prompt is up would dismiss the prompt's state.
-      if (blocked === 0) {
+      // Only claim idle when nothing at all is outstanding. A cross-tab clash
+      // leaves the shared record CLEAN (the other tab already synced it), so
+      // without `awaitingResolution` the very next flush reported idle and
+      // wiped the conflict state — the prompt never appeared and the losing
+      // tab's work disappeared with no warning at all.
+      if (blocked === 0 && this.awaitingResolution.size === 0) {
         this.onSyncState({ status: "idle" });
       }
       return;
@@ -404,6 +483,10 @@ export class WorkspaceStore {
         version: result.version,
         dirty: false,
         failures: 0,
+        syncedSignature: sceneSignature(
+          record.elements,
+          record.appState as Record<string, unknown>,
+        ),
       });
       this.pendingFileIds.delete(record.id);
 
@@ -465,6 +548,8 @@ export class WorkspaceStore {
    * expected to hand the returned document back to the editor.
    */
   async resolveWithServer(id: DocumentId): Promise<LoadedDocument> {
+    await this.cache.dropContended(id, this.tabId);
+    this.awaitingResolution.delete(id);
     // Fetch first. Deleting the local copy up front would destroy both sides
     // if the server happened to be unreachable at that moment.
     const remote = await this.api.getScene(id);
@@ -504,13 +589,24 @@ export class WorkspaceStore {
       return;
     }
 
-    await this.cache.update(id, {
+    // Prefer this tab's parked scene; the shared record holds the other tab's.
+    const contended = await this.cache.getContended(id, this.tabId);
+
+    await this.cache.put({
+      ...record,
+      ...(contended
+        ? { elements: contended.elements, appState: contended.appState }
+        : {}),
       version: record.conflictedWithVersion,
       conflictedWithVersion: undefined,
       dirty: true,
+      revision: record.revision + 1,
       lastWriterTab: this.tabId,
     });
-    this.knownRevision.set(id, record.revision);
+
+    await this.cache.dropContended(id, this.tabId);
+    this.awaitingResolution.delete(id);
+    this.knownRevision.set(id, record.revision + 1);
     await this.flush();
   }
 

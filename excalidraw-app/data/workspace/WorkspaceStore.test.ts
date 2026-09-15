@@ -554,3 +554,173 @@ describe("two tabs on the same document", () => {
     expect(server.scenes.get("doc-1")!.elements).toEqual([element("from-b")]);
   });
 });
+
+describe("WorkspaceStore — no-op writes", () => {
+  let server: FakeWorkspaceServer;
+  let cache: SceneCache;
+  let store: WorkspaceStore;
+
+  beforeEach(() => {
+    server = new FakeWorkspaceServer();
+    cache = new SceneCache(createMemoryKV());
+    store = new WorkspaceStore({
+      cache,
+      api: server.api,
+      flushDebounceMs: 100_000,
+    });
+  });
+
+  /*
+   * Opening a document fires onChange, which looks exactly like an edit. If
+   * that reaches the server the version bumps for content nobody changed, and
+   * every other device holding the document is told it "changed elsewhere".
+   * Observed in a real browser as a save roughly once a second on an idle
+   * canvas.
+   */
+  it("does not push content identical to what the server holds", async () => {
+    server.seed("doc-1");
+    const loaded = await store.loadDocument("doc-1");
+
+    await store.save("doc-1", loaded.elements, loaded.appState);
+    await store.flushNow();
+
+    expect(server.putCalls).toHaveLength(0);
+    expect(server.scenes.get("doc-1")!.meta.version).toBe(1);
+  });
+
+  it("still pushes once something genuinely changes", async () => {
+    server.seed("doc-1");
+    const loaded = await store.loadDocument("doc-1");
+
+    await store.save("doc-1", loaded.elements, loaded.appState);
+    await store.flushNow();
+    await store.save("doc-1", [element("new")], {});
+    await store.flushNow();
+
+    expect(server.putCalls).toHaveLength(1);
+    expect(server.scenes.get("doc-1")!.elements).toEqual([element("new")]);
+  });
+
+  it("treats a viewport-only change as a real change", async () => {
+    server.seed("doc-1");
+    const loaded = await store.loadDocument("doc-1");
+
+    await store.save("doc-1", loaded.elements, { scrollX: 250 });
+    await store.flushNow();
+
+    expect(server.putCalls).toHaveLength(1);
+  });
+
+  it("does not suppress a write that is still queued", async () => {
+    server.seed("doc-1");
+    const loaded = await store.loadDocument("doc-1");
+
+    server.offline = true;
+    await store.save("doc-1", [element("offline-edit")], {});
+    await store.flushNow();
+
+    // Same content again while the first is still pending must not be
+    // mistaken for a no-op and drop the queued write.
+    await store.save("doc-1", [element("offline-edit")], {});
+    server.offline = false;
+    await store.flushNow();
+
+    expect(server.scenes.get("doc-1")!.elements).toEqual([
+      element("offline-edit"),
+    ]);
+    expect(loaded.elements).toEqual([]);
+  });
+});
+
+describe("two tabs — the losing tab's work must survive", () => {
+  let server: FakeWorkspaceServer;
+  let cache: SceneCache;
+
+  const openTab = (states?: SyncState[]) =>
+    new WorkspaceStore({
+      cache,
+      api: server.api,
+      flushDebounceMs: 100_000,
+      onSyncState: (state) => states?.push(state),
+    });
+
+  beforeEach(() => {
+    server = new FakeWorkspaceServer();
+    cache = new SceneCache(createMemoryKV());
+    server.seed("doc-1");
+  });
+
+  /*
+   * Seen in a real browser: both tabs drew, one tab's work vanished, and no
+   * prompt ever appeared. Two causes — the shared record stays clean after the
+   * winning tab syncs, so the next flush reported "idle" over the conflict
+   * state; and the losing scene was discarded rather than parked, so even
+   * "keep mine" would have pushed the other tab's content.
+   */
+  it("keeps the conflict visible instead of reporting idle", async () => {
+    const tabA = openTab();
+    const bStates: SyncState[] = [];
+    const tabB = openTab(bStates);
+
+    await tabA.loadDocument("doc-1");
+    await tabB.loadDocument("doc-1");
+
+    await tabA.save("doc-1", [element("from-a")], {});
+    await tabA.flushNow();
+
+    await tabB.save("doc-1", [element("from-b")], {});
+    await tabB.flushNow();
+    await tabB.flushNow();
+
+    expect(bStates.at(-1)).toMatchObject({ status: "conflict" });
+  });
+
+  it("\"keep mine\" uploads THIS tab's scene, not the other tab's", async () => {
+    const tabA = openTab();
+    const tabB = openTab();
+
+    await tabA.loadDocument("doc-1");
+    await tabB.loadDocument("doc-1");
+
+    await tabA.save("doc-1", [element("from-a")], {});
+    await tabA.flushNow();
+
+    await tabB.save("doc-1", [element("from-b")], {});
+    await tabB.resolveWithLocal("doc-1");
+    await tabB.flushNow();
+
+    expect(server.scenes.get("doc-1")!.elements).toEqual([element("from-b")]);
+  });
+
+  it("parks the losing scene durably, so a reload does not lose it", async () => {
+    const tabA = openTab();
+    const tabB = openTab();
+    await tabA.loadDocument("doc-1");
+    await tabB.loadDocument("doc-1");
+
+    await tabA.save("doc-1", [element("from-a")], {});
+    await tabA.flushNow();
+    await tabB.save("doc-1", [element("from-b")], {});
+
+    // The parked copy lives in the cache, not in memory.
+    const parked = await cache.getContended("doc-1", (tabB as any).tabId);
+    expect(parked?.elements).toEqual([element("from-b")]);
+  });
+
+  it('"use theirs" discards the parked scene rather than leaving it behind', async () => {
+    const tabA = openTab();
+    const tabB = openTab();
+    await tabA.loadDocument("doc-1");
+    await tabB.loadDocument("doc-1");
+
+    await tabA.save("doc-1", [element("from-a")], {});
+    await tabA.flushNow();
+    await tabB.save("doc-1", [element("from-b")], {});
+    await tabB.resolveWithServer("doc-1");
+
+    expect(
+      await cache.getContended("doc-1", (tabB as any).tabId),
+    ).toBeUndefined();
+    expect(server.scenes.get("doc-1")!.elements).toEqual([element("from-a")]);
+  });
+});

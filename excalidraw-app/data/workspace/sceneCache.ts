@@ -63,6 +63,28 @@ export class SceneCache {
     return this.kv.delete(this.key(id));
   }
 
+  /*
+   * A document has ONE shared cache record, so when two tabs edit it at once
+   * the second one has nowhere to put its scene. Parking it here keeps it
+   * durable (it survives a reload) until the user picks a side, instead of it
+   * being dropped on the floor. Deliberately not prefixed "scene:", so the
+   * flush queue never mistakes it for a document to push.
+   */
+  private contendedKey = (id: DocumentId, tabId: string) =>
+    `contended:${id}:${tabId}`;
+
+  putContended(id: DocumentId, tabId: string, record: SceneRecord) {
+    return this.kv.set(this.contendedKey(id, tabId), record);
+  }
+
+  getContended(id: DocumentId, tabId: string) {
+    return this.kv.get<SceneRecord>(this.contendedKey(id, tabId));
+  }
+
+  dropContended(id: DocumentId, tabId: string) {
+    return this.kv.delete(this.contendedKey(id, tabId));
+  }
+
   /** Pushes stop being retried after this many consecutive failures. */
   static readonly MAX_FAILURES = 5;
 

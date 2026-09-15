@@ -2,7 +2,7 @@ import { Dialog } from "@excalidraw/excalidraw/components/Dialog";
 import { FilledButton } from "@excalidraw/excalidraw/components/FilledButton";
 import React, { useState } from "react";
 
-import { useWorkspace } from "./WorkspaceProvider";
+import { useSyncState, useWorkspace } from "./WorkspaceProvider";
 
 import "./workspace.scss";
 
@@ -14,7 +14,8 @@ import "./workspace.scss";
  * document stuck — never syncing, with no visible reason why.
  */
 export const ConflictDialog = () => {
-  const { syncState, resolveConflict } = useWorkspace();
+  const syncState = useSyncState();
+  const { resolveConflict } = useWorkspace();
   const [busy, setBusy] = useState<"local" | "server" | null>(null);
 
   if (syncState.status !== "conflict") {

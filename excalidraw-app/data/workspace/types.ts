@@ -40,6 +40,13 @@ export type SceneRecord = {
   /** Consecutive failed pushes, used to stop retrying a poisoned record. */
   failures?: number;
   /**
+   * Signature of the content the server last confirmed. A save whose content
+   * matches this is a no-op and must not be sent: an identical write still
+   * bumps the version, which makes every other device's copy stale and
+   * produces conflict prompts for an edit nobody made.
+   */
+  syncedSignature?: string;
+  /**
    * Which browser tab last wrote this record. Two tabs on one document share
    * a cache entry and therefore a `version`, so the server's If-Match check
    * cannot see them diverge — this is what restores that protection locally.
