@@ -151,7 +151,6 @@ import { AppSidebar } from "./components/AppSidebar";
 import { ConflictDialog } from "./workspace/ConflictDialog";
 import { LoginGate } from "./workspace/LoginGate";
 import { originWithCurrentDocument } from "./workspace/routing";
-import { SyncStatus } from "./workspace/SyncStatus";
 import { WorkspaceProvider, useWorkspace } from "./workspace/WorkspaceProvider";
 
 import type { CollabAPI } from "./collab/Collab";
@@ -1131,7 +1130,6 @@ const ExcalidrawWrapper = () => {
           )}
         </OverwriteConfirmDialog>
         <AppFooter onChange={() => excalidrawAPI?.refresh()} />
-        <SyncStatus />
         {excalidrawAPI && <AIComponents excalidrawAPI={excalidrawAPI} />}
 
         <TTDDialogTrigger />

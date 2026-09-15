@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import React from "react";
+import React, { useEffect, useState } from "react";
 
 import { useSyncState, useWorkspace } from "./WorkspaceProvider";
 
@@ -12,12 +12,31 @@ import "./workspace.scss";
  * assumption the user can make silently — closing the lid with writes still
  * queued must be something they can see, not discover later.
  */
+/**
+ * A save on a healthy connection completes in tens of milliseconds. Rendering
+ * "Saving…" for that long is not information, it is a flash — and it was
+ * appearing and disappearing once per save while drawing. Only surface it if
+ * the save is slow enough that silence would be worrying.
+ */
+const SLOW_SAVE_MS = 1000;
+
 export const SyncStatus = () => {
   const syncState = useSyncState();
   const { flush } = useWorkspace();
+  const [saveIsSlow, setSaveIsSlow] = useState(false);
+
+  useEffect(() => {
+    if (syncState.status !== "saving") {
+      setSaveIsSlow(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSaveIsSlow(true), SLOW_SAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [syncState.status]);
 
   const { label, tone, action } = describe(syncState);
-  if (!label) {
+
+  if (!label || (syncState.status === "saving" && !saveIsSlow)) {
     return null;
   }
 

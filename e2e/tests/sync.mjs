@@ -13,6 +13,37 @@ export const name = "offline queue and conflicts";
 export const run = async ({ browser, base }) => {
   const page = await newPage(browser);
   await signIn(page, base);
+
+  // Own canvas: the shapes drawn here would otherwise skew the element counts
+  // the offline checks below depend on.
+  await openFreshDocument(page, base, "flicker test");
+  /*
+   * The indicator must not churn while drawing. It used to mount and unmount
+   * once per save, in normal flow inside the editor container, which reflowed
+   * the layout and made the canvas visibly flicker the whole time you drew.
+   */
+  await page.evaluate(() => {
+    window.__pillChurn = 0;
+    let present = false;
+    new MutationObserver(() => {
+      const now = !!document.querySelector(".workspace-sync");
+      if (now !== present) {
+        window.__pillChurn++;
+      }
+      present = now;
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+
+  for (let i = 0; i < 4; i++) {
+    await drawRect(page, 250 + i * 80, 480, 50, 50);
+    await settle(1400);
+  }
+  check(
+    (await page.evaluate(() => window.__pillChurn)) === 0,
+    "the sync indicator does not flicker while drawing",
+    `${await page.evaluate(() => window.__pillChurn)} appear/disappear events`,
+  );
+
   const id = await openFreshDocument(page, base, "offline test");
 
   await drawRect(page, 300, 260);
