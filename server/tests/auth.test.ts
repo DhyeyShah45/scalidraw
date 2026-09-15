@@ -265,3 +265,48 @@ describe("config validation", () => {
     );
   });
 });
+
+describe("empty JSON bodies", () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    harness = await createHarness();
+  });
+  afterEach(async () => harness.close());
+
+  it("accepts a body-less POST that still declares application/json", async () => {
+    // The browser client sets this header on every request. Fastify rejects an
+    // empty body with FST_ERR_CTP_EMPTY_JSON_BODY by default, which silently
+    // broke sign-out — logout takes no body.
+    const cookies = await harness.auth();
+
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      cookies,
+      headers: { "content-type": "application/json" },
+      payload: "",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      (
+        await harness.app.inject({
+          method: "GET",
+          url: "/api/documents",
+          cookies,
+        })
+      ).statusCode,
+    ).toBe(401);
+  });
+
+  it("still rejects a malformed JSON body", async () => {
+    const response = await harness.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      headers: { "content-type": "application/json" },
+      payload: "{not json",
+    });
+    expect(response.statusCode).toBe(400);
+  });
+});

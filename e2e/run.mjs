@@ -15,9 +15,17 @@ import { failureCount, startStack } from "./harness.mjs";
 import * as auth from "./tests/auth.mjs";
 import * as documents from "./tests/documents.mjs";
 import * as rename from "./tests/rename.mjs";
+import * as session from "./tests/session.mjs";
 import * as sync from "./tests/sync.mjs";
 
-const ALL = { auth, documents, rename, sync };
+const ALL = {
+  auth,
+  documents,
+  rename,
+  session,
+  upsells: session.noUpsells,
+  sync,
+};
 
 const only = process.argv[2];
 const suites = Object.entries(ALL)

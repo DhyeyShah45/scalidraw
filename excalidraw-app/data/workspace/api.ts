@@ -69,9 +69,14 @@ export const request = async <T>(
       // Never follow: a redirect from an API route is an edge challenge, and
       // following it would hand us a login page dressed as a 200.
       redirect: "manual",
-      headers: options.raw
-        ? options.headers
-        : { ...JSON_HEADERS, ...options.headers },
+      // Only claim a JSON content-type when a JSON body is actually being
+      // sent. A body-less POST with `application/json` is rejected outright by
+      // Fastify (FST_ERR_CTP_EMPTY_JSON_BODY) — which is what silently broke
+      // sign-out, since /api/auth/logout takes no body.
+      headers:
+        options.raw || options.body === undefined
+          ? options.headers
+          : { ...JSON_HEADERS, ...options.headers },
       body:
         options.raw ??
         (options.body ? JSON.stringify(options.body) : undefined),

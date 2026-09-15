@@ -38,6 +38,30 @@ export const buildApp = async ({
     bodyLimit: Math.max(config.maxSceneBytes, config.maxFileBytes),
   });
 
+  /*
+   * Fastify rejects an empty body sent with `application/json`. Plenty of
+   * clients set that header on every request regardless of whether they have
+   * a body, so treat empty as `{}` rather than 400.
+   */
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (_request, body, done) => {
+      if (!body || (typeof body === "string" && body.trim() === "")) {
+        done(null, {});
+        return;
+      }
+      try {
+        done(null, JSON.parse(body as string));
+      } catch (error) {
+        // Without an explicit status Fastify reports a parse failure as a 500.
+        // Malformed input from a client is a 400.
+        (error as Error & { statusCode?: number }).statusCode = 400;
+        done(error as Error, undefined);
+      }
+    },
+  );
+
   for (const type of BINARY_TYPES) {
     app.addContentTypeParser(
       type,

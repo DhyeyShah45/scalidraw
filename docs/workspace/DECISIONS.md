@@ -126,6 +126,14 @@ library          singleton row, items blob            -- D14
 
 Branch off `master`; this fork has no local commits and upstream pulls should stay clean fast-forwards.
 
+## Later decisions
+
+- **D30. Sign out lives in the main menu.** Sessions are 30-day sliding (D25), which is wrong when the instance is reachable from a shared or borrowed machine. Flushes before clearing, so a session never ends over unsent work.
+
+- **D31. Every route out to the hosted product is removed.** The Excalidraw+ button, the sign-up items, the promo banner, the "export to Excalidraw+" panel and overwrite action, the promo sidebar tab, the encrypted-storage badge, and the GitHub / X / Discord / YouTube command-palette links. They advertise a product this instance replaces, and each one navigates away from the canvas. Reversed from the original stance of leaving upstream UI alone.
+
+- **D32. Collaboration keeps its machinery but loses every entry point.** Share button, menu item, welcome-screen trigger and command-palette commands are gone. `<Collab>` still mounts: unpicking it would mean touching the scene bootstrap that the normal load path shares, and would make every upstream merge painful for no gain. With no UI to reach it, it never runs. This supersedes the UI half of D17; the two collab data-loss fixes from phase 4 stay.
+
 ## Known gaps (found by review, deliberately not yet fixed)
 
 Carried forward rather than silently ignored. None of these lose data on the happy path; each is a real edge worth closing.
